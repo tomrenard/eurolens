@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { differenceInDays, differenceInHours, differenceInMinutes, differenceInSeconds } from "date-fns";
+import { Calendar, Zap } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import type { PlenarySession } from "@/types/europarl";
 
@@ -34,13 +35,12 @@ function calculateTimeLeft(targetDate: Date): TimeLeft {
 function TimeUnit({ value, label }: { value: number; label: string }) {
   return (
     <div className="flex flex-col items-center">
-      <span
-        className="text-3xl md:text-5xl font-bold text-primary tabular-nums"
-        aria-hidden="true"
-      >
-        {String(value).padStart(2, "0")}
-      </span>
-      <span className="text-xs md:text-sm text-muted-foreground uppercase tracking-wide mt-1">
+      <div className="w-14 h-14 md:w-18 md:h-18 rounded-xl bg-primary text-primary-foreground flex items-center justify-center shadow-lg">
+        <span className="text-2xl md:text-3xl font-bold tabular-nums" suppressHydrationWarning>
+          {String(value).padStart(2, "0")}
+        </span>
+      </div>
+      <span className="text-xs md:text-sm text-muted-foreground uppercase tracking-wide mt-2 font-medium">
         {label}
       </span>
     </div>
@@ -61,9 +61,7 @@ function getServerSnapshot() {
 
 export function CountdownTimer({ session }: CountdownTimerProps) {
   const mounted = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-  const [timeLeft, setTimeLeft] = useState<TimeLeft>(() =>
-    calculateTimeLeft(session.startDate)
-  );
+  const [timeLeft, setTimeLeft] = useState<TimeLeft>({ days: 0, hours: 0, minutes: 0, seconds: 0 });
 
   useEffect(() => {
     if (!mounted) return;
@@ -72,57 +70,53 @@ export function CountdownTimer({ session }: CountdownTimerProps) {
       "(prefers-reduced-motion: reduce)"
     ).matches;
 
+    const updateTime = () => setTimeLeft(calculateTimeLeft(session.startDate));
+    updateTime();
+
     if (prefersReducedMotion) {
       return;
     }
 
-    const timer = setInterval(() => {
-      setTimeLeft(calculateTimeLeft(session.startDate));
-    }, 1000);
+    const timer = setInterval(updateTime, 1000);
 
     return () => clearInterval(timer);
   }, [session.startDate, mounted]);
 
-  const isSessionStarted =
+  const isSessionStarted = mounted && 
     timeLeft.days === 0 &&
     timeLeft.hours === 0 &&
     timeLeft.minutes === 0 &&
     timeLeft.seconds === 0;
 
-  const ariaLabel = isSessionStarted
-    ? `${session.title} is happening now`
-    : `${session.title} starts in ${timeLeft.days} days, ${timeLeft.hours} hours, ${timeLeft.minutes} minutes, and ${timeLeft.seconds} seconds`;
-
-  if (!mounted) {
-    return (
-      <Card className="bg-gradient-to-br from-primary/5 to-primary/10 border-primary/20">
-        <CardContent className="pt-6">
-          <div className="text-center">
-            <h3 className="text-lg font-semibold text-foreground mb-2">
-              Next Plenary Session
-            </h3>
-            <p className="text-muted-foreground mb-4">{session.title}</p>
-            <div className="flex justify-center gap-4 md:gap-8">
-              <TimeUnit value={0} label="Days" />
-              <TimeUnit value={0} label="Hours" />
-              <TimeUnit value={0} label="Minutes" />
-              <TimeUnit value={0} label="Seconds" />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+  const ariaLabel = !mounted
+    ? `Countdown to ${session.title}`
+    : isSessionStarted
+      ? `${session.title} is happening now`
+      : `${session.title} starts in ${timeLeft.days} days, ${timeLeft.hours} hours, ${timeLeft.minutes} minutes, and ${timeLeft.seconds} seconds`;
 
   return (
-    <Card className="bg-gradient-to-br from-primary/5 to-primary/10 border-primary/20">
+    <Card className="h-full overflow-hidden border border-primary/20 bg-gradient-to-br from-primary/5 via-blue-500/5 to-purple-500/5">
       <CardContent className="pt-6">
-        <div className="text-center" role="timer" aria-label={ariaLabel}>
-          <h3 className="text-lg font-semibold text-foreground mb-2">
-            {isSessionStarted ? "Session In Progress" : "Next Plenary Session"}
+        <div className="text-center" role="timer" aria-label={ariaLabel} suppressHydrationWarning>
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 text-primary text-sm mb-4">
+            {isSessionStarted ? (
+              <>
+                <Zap className="h-4 w-4 text-yellow-500" />
+                <span className="font-medium">Session In Progress</span>
+              </>
+            ) : (
+              <>
+                <Calendar className="h-4 w-4" />
+                <span className="font-medium">Next Plenary Session</span>
+              </>
+            )}
+          </div>
+
+          <h3 className="text-xl md:text-2xl font-bold text-foreground mb-2">
+            {session.title}
           </h3>
-          <p className="text-muted-foreground mb-4">{session.title}</p>
-          <p className="text-sm text-muted-foreground mb-6">
+          
+          <p className="text-muted-foreground mb-6" suppressHydrationWarning>
             {session.startDate.toLocaleDateString("en-GB", {
               weekday: "long",
               year: "numeric",
@@ -130,21 +124,25 @@ export function CountdownTimer({ session }: CountdownTimerProps) {
               day: "numeric",
             })}
           </p>
+
           {!isSessionStarted && (
-            <div className="flex justify-center gap-4 md:gap-8">
+            <div className="flex justify-center items-center gap-2 md:gap-3">
               <TimeUnit value={timeLeft.days} label="Days" />
-              <span className="text-3xl md:text-5xl font-bold text-primary/50 self-start">
-                :
-              </span>
+              <span className="text-2xl md:text-3xl font-bold text-muted-foreground/30 mt-[-1.5rem]">:</span>
               <TimeUnit value={timeLeft.hours} label="Hours" />
-              <span className="text-3xl md:text-5xl font-bold text-primary/50 self-start">
-                :
-              </span>
-              <TimeUnit value={timeLeft.minutes} label="Minutes" />
-              <span className="text-3xl md:text-5xl font-bold text-primary/50 self-start">
-                :
-              </span>
-              <TimeUnit value={timeLeft.seconds} label="Seconds" />
+              <span className="text-2xl md:text-3xl font-bold text-muted-foreground/30 mt-[-1.5rem]">:</span>
+              <TimeUnit value={timeLeft.minutes} label="Min" />
+              <span className="text-2xl md:text-3xl font-bold text-muted-foreground/30 mt-[-1.5rem]">:</span>
+              <TimeUnit value={timeLeft.seconds} label="Sec" />
+            </div>
+          )}
+
+          {isSessionStarted && (
+            <div className="flex justify-center">
+              <div className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-green-500 text-white font-semibold animate-pulse">
+                <Zap className="h-5 w-5" />
+                Democracy in Action
+              </div>
             </div>
           )}
         </div>

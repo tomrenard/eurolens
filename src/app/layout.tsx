@@ -9,16 +9,33 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "EuroLens - Brussels, Briefed",
+  title: "EuroLens - Your Voice in Brussels",
   description:
-    "Understand the laws shaping Europe before they pass. AI-powered summaries of EU legislative documents.",
+    "Understand EU legislation, take a stance, and make your voice heard. Contact MEPs, join consultations, and earn XP for civic engagement.",
   keywords: [
     "EU",
     "European Parliament",
     "legislation",
     "democracy",
-    "AI summaries",
+    "civic engagement",
+    "MEP",
+    "consultations",
   ],
+  icons: {
+    icon: "/favicon.svg",
+  },
+  openGraph: {
+    title: "EuroLens - Your Voice in Brussels",
+    description: "Understand EU policy, take action, and make your voice heard. Contact MEPs, join consultations, and shape European democracy.",
+    type: "website",
+    locale: "en_US",
+    siteName: "EuroLens",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "EuroLens - Your Voice in Brussels",
+    description: "Understand EU policy, take action, and make your voice heard. Contact MEPs, join consultations, and shape European democracy.",
+  },
 };
 
 export default function RootLayout({

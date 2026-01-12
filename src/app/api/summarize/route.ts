@@ -3,6 +3,50 @@ import { google } from "@ai-sdk/google";
 import type { Persona, Country } from "@/types/europarl";
 import { PERSONA_LABELS, COUNTRY_LABELS } from "@/types/europarl";
 
+const RATE_LIMIT = 10;
+const RATE_WINDOW = 60 * 1000;
+
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+
+function getClientIp(req: Request): string {
+  const forwardedFor = req.headers.get("x-forwarded-for");
+  if (forwardedFor) {
+    return forwardedFor.split(",")[0].trim();
+  }
+  
+  const realIp = req.headers.get("x-real-ip");
+  if (realIp) {
+    return realIp;
+  }
+  
+  return "unknown";
+}
+
+function checkRateLimit(ip: string): { allowed: boolean; remaining: number; resetIn: number } {
+  const now = Date.now();
+  const record = rateLimitMap.get(ip);
+
+  if (!record || now > record.resetTime) {
+    rateLimitMap.set(ip, { count: 1, resetTime: now + RATE_WINDOW });
+    return { allowed: true, remaining: RATE_LIMIT - 1, resetIn: RATE_WINDOW };
+  }
+
+  if (record.count >= RATE_LIMIT) {
+    return { 
+      allowed: false, 
+      remaining: 0, 
+      resetIn: record.resetTime - now 
+    };
+  }
+
+  record.count++;
+  return { 
+    allowed: true, 
+    remaining: RATE_LIMIT - record.count, 
+    resetIn: record.resetTime - now 
+  };
+}
+
 const BASE_SYSTEM_PROMPT = `You are a non-partisan political analyst for EuroLens, an EU legislation tracker.
 Your role is to make complex EU legislative documents accessible to ordinary citizens.
 
@@ -89,6 +133,28 @@ Provide your response in this exact format:
 
 export async function POST(req: Request) {
   try {
+    const clientIp = getClientIp(req);
+    const { allowed, remaining, resetIn } = checkRateLimit(clientIp);
+
+    if (!allowed) {
+      return new Response(
+        JSON.stringify({ 
+          error: "Rate limit exceeded. Please try again later.",
+          retryAfter: Math.ceil(resetIn / 1000)
+        }),
+        {
+          status: 429,
+          headers: { 
+            "Content-Type": "application/json",
+            "X-RateLimit-Limit": String(RATE_LIMIT),
+            "X-RateLimit-Remaining": "0",
+            "X-RateLimit-Reset": String(Math.ceil(resetIn / 1000)),
+            "Retry-After": String(Math.ceil(resetIn / 1000))
+          },
+        }
+      );
+    }
+
     const body = await req.json();
     const {
       title,
@@ -107,7 +173,11 @@ export async function POST(req: Request) {
     if (!title) {
       return new Response(JSON.stringify({ error: "Title is required" }), {
         status: 400,
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "X-RateLimit-Limit": String(RATE_LIMIT),
+          "X-RateLimit-Remaining": String(remaining),
+        },
       });
     }
 
@@ -120,7 +190,11 @@ export async function POST(req: Request) {
       prompt: userPrompt,
     });
 
-    return result.toTextStreamResponse();
+    const response = result.toTextStreamResponse();
+    response.headers.set("X-RateLimit-Limit", String(RATE_LIMIT));
+    response.headers.set("X-RateLimit-Remaining", String(remaining));
+    
+    return response;
   } catch (error) {
     console.error("Summarize API error:", error);
     return new Response(

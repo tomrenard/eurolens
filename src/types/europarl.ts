@@ -69,13 +69,23 @@ export interface PlenarySession {
   type: string;
 }
 
+export interface VotingResult {
+  favor: number;
+  against: number;
+  abstention: number;
+}
+
 export interface LegislativeProcedure {
   id: string;
   reference: string;
   title: string;
+  summary?: string;
   type: string;
   subjects: string[];
   status: string;
+  sourceUrl?: string;
+  parliamentaryTerm?: string;
+  votingResult?: VotingResult;
   lastActivity?: {
     date: string;
     type: string;
@@ -115,3 +125,20 @@ export const COUNTRY_LABELS: Record<Country, string> = {
   PL: "Poland",
   NL: "Netherlands",
 };
+
+export type VoteType = "favor" | "against" | "abstention";
+
+export interface MEPVote {
+  mepId: string;
+  name: string;
+  country: string;
+  politicalGroup: string;
+  vote: VoteType;
+}
+
+export interface MEPVoteSummary {
+  totalVotes: number;
+  byGroup: Record<string, { favor: number; against: number; abstention: number }>;
+  byCountry: Record<string, { favor: number; against: number; abstention: number }>;
+  votes: MEPVote[];
+}

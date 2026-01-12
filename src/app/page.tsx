@@ -1,5 +1,8 @@
 import { getLegislativeProcedures, getUpcomingPlenarySessions } from "@/lib/europarl";
 import { Dashboard } from "@/components/dashboard";
+import { HeroSection } from "@/components/hero-section";
+
+export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const [proceduresResult, sessionsResult] = await Promise.all([
@@ -9,17 +12,11 @@ export default async function Home() {
 
   return (
     <main className="min-h-screen p-4 md:p-8 max-w-7xl mx-auto">
-      <header className="mb-8 text-center md:text-left">
-        <h1 className="text-3xl md:text-4xl font-bold text-primary mb-2">
-          EuroLens
-        </h1>
-        <p className="text-muted-foreground text-lg max-w-2xl">
-          Brussels, Briefed. Understand the laws shaping Europe before they pass.
-        </p>
-      </header>
+      <HeroSection />
 
       <Dashboard
-        procedures={proceduresResult.data}
+        inProgressProcedures={proceduresResult.data.inProgress}
+        completedProcedures={proceduresResult.data.completed}
         sessions={sessionsResult.data}
         proceduresError={proceduresResult.error}
         sessionsError={sessionsResult.error}
