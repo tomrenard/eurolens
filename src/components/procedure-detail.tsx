@@ -13,6 +13,7 @@ import type { VotingResult, Persona, Country } from "@/types/europarl";
 interface ProcedureData {
   reference: string;
   title: string;
+  summary?: string;
   type: string;
   status: string;
   sourceUrl?: string;
