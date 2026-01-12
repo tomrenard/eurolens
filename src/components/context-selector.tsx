@@ -7,22 +7,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { usePersona } from "@/components/persona-context";
 import type { Persona, Country } from "@/types/europarl";
 import { PERSONA_LABELS, COUNTRY_LABELS } from "@/types/europarl";
 
-interface ContextSelectorProps {
-  persona: Persona;
-  country: Country;
-  onPersonaChange: (persona: Persona) => void;
-  onCountryChange: (country: Country) => void;
-}
+export function ContextSelector() {
+  const { persona, country, setPersona, setCountry } = usePersona();
 
-export function ContextSelector({
-  persona,
-  country,
-  onPersonaChange,
-  onCountryChange,
-}: ContextSelectorProps) {
   return (
     <div className="flex flex-col sm:flex-row gap-4 p-4 bg-card rounded-lg border">
       <div className="flex-1">
@@ -34,7 +25,7 @@ export function ContextSelector({
         </label>
         <Select
           value={persona}
-          onValueChange={(value) => onPersonaChange(value as Persona)}
+          onValueChange={(value) => setPersona(value as Persona)}
         >
           <SelectTrigger id="persona-select" className="w-full">
             <SelectValue placeholder="Select your role" />
@@ -57,7 +48,7 @@ export function ContextSelector({
         </label>
         <Select
           value={country}
-          onValueChange={(value) => onCountryChange(value as Country)}
+          onValueChange={(value) => setCountry(value as Country)}
         >
           <SelectTrigger id="country-select" className="w-full">
             <SelectValue placeholder="Select your country" />

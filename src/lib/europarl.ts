@@ -64,16 +64,6 @@ interface ApiDecision {
   referenceText?: Record<string, string>;
 }
 
-interface ApiDocumentExpression {
-  language: string;
-  title?: Record<string, string>;
-}
-
-interface ApiDocumentDetail {
-  id: string;
-  is_realized_by?: ApiDocumentExpression[];
-}
-
 function getLocalizedLabel(
   labels: Record<string, string> | undefined,
   lang: string = "en"
@@ -82,63 +72,8 @@ function getLocalizedLabel(
   return labels[lang] || labels.en || Object.values(labels)[0] || "";
 }
 
-function convertToDocumentId(reference: string): string | null {
-  const match = reference.match(/^([A-Z])(\d+)-(\d+)\/(\d+)$/);
-  if (!match) return null;
-  const [, letter, term, num, year] = match;
-  return `${letter}-${term}-${year}-${num.padStart(4, "0")}`;
-}
-
-async function fetchDocumentTitle(reference: string): Promise<string | null> {
-  const docId = convertToDocumentId(reference);
-  if (!docId) return null;
-
-  const cacheKey = getCacheKey("doc-title", docId);
-  const cached = apiCache.get<string>(cacheKey);
-  if (cached) return cached;
-
-  try {
-    const res = await fetch(
-      `${BASE_URL}/plenary-documents/${docId}?format=application%2Fld%2Bjson`,
-      {
-        headers: { Accept: "application/ld+json" },
-        next: { revalidate: 3600, tags: ["europarl-documents"] },
-      }
-    );
-    if (!res.ok) return null;
-
-    const data: ApiResponse<ApiDocumentDetail> = await res.json();
-    const doc = data.data?.[0] || data["@graph"]?.[0];
-    if (!doc?.is_realized_by) return null;
-
-    const enExpr = doc.is_realized_by.find((e) => e.language?.includes("/ENG"));
-    let title: string | null = null;
-    
-    if (enExpr?.title?.en) {
-      title = enExpr.title.en;
-    } else {
-      const first = doc.is_realized_by[0];
-      title = first?.title ? Object.values(first.title)[0] as string : null;
-    }
-
-    if (title) {
-      apiCache.set(cacheKey, title, CACHE_TTL);
-    }
-    return title;
-  } catch {
-    return null;
-  }
-}
-
 function isProcedureReference(reference: string): boolean {
   return /^\d{4}\/\d+\([A-Z]+\)$/.test(reference);
-}
-
-function convertToProcedureIdForTitle(reference: string): string {
-  const match = reference.match(/^(\d{4})\/(\d+)\(([A-Z]+)\)$/);
-  if (!match) return reference.replace(/\//g, "_").replace(/[()]/g, "");
-  const [, year, num, type] = match;
-  return `${year}_${num.padStart(4, "0")}_${type}`;
 }
 
 function convertProcedureIdToReference(procId: string): string | null {
@@ -146,38 +81,6 @@ function convertProcedureIdToReference(procId: string): string | null {
   if (!match) return null;
   const [, year, num, type] = match;
   return `${year}/${parseInt(num, 10)}(${type})`;
-}
-
-async function fetchProcedureTitle(reference: string): Promise<string | null> {
-  if (!isProcedureReference(reference)) return null;
-  
-  const procId = convertToProcedureIdForTitle(reference);
-  const cacheKey = getCacheKey("proc-title", procId);
-  const cached = apiCache.get<string>(cacheKey);
-  if (cached) return cached;
-
-  try {
-    const res = await fetch(
-      `${BASE_URL}/procedures/${procId}?format=application%2Fld%2Bjson`,
-      {
-        headers: { Accept: "application/ld+json" },
-        next: { revalidate: 3600, tags: ["europarl-procedures"] },
-      }
-    );
-    if (!res.ok) return null;
-
-    const data: ApiResponse<ApiProcedureDetailed> = await res.json();
-    const proc = data.data?.[0] || data["@graph"]?.[0];
-    if (!proc?.process_title) return null;
-
-    const title = getLocalizedLabel(proc.process_title);
-    if (title) {
-      apiCache.set(cacheKey, title, CACHE_TTL);
-    }
-    return title || null;
-  } catch {
-    return null;
-  }
 }
 
 function getProcedureTypeLabel(type: string | undefined): string {
@@ -335,7 +238,7 @@ async function fetchPlenaryMeetings(year: number): Promise<ApiMeeting[]> {
       `${BASE_URL}/meetings?format=application%2Fld%2Bjson&offset=0&limit=150&year=${year}`,
       {
         headers: { Accept: "application/ld+json" },
-        cache: "no-store",
+        next: { revalidate: 300, tags: ["europarl-meetings"] },
       }
     );
 
@@ -371,7 +274,7 @@ async function fetchMeetingDecisions(meetingId: string): Promise<ApiDecision[]> 
       `${BASE_URL}/meetings/${meetingId}/decisions?format=application%2Fld%2Bjson`,
       {
         headers: { Accept: "application/ld+json" },
-        cache: "no-store",
+        next: { revalidate: 300, tags: ["europarl-decisions"] },
       }
     );
 
@@ -411,22 +314,20 @@ async function getRecentPlenaryDecisions(): Promise<ApiDecision[]> {
   
   const now = new Date();
   const sixMonthsAgo = new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000);
-  const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
   
   const recentMeetings = allMeetings
     .filter((m) => {
       const dateStr = m.activity_start_date || m.activity_date;
-      if (!dateStr) return true;
+      if (!dateStr) return false;
       const meetingDate = new Date(dateStr);
-      if (isNaN(meetingDate.getTime())) return true;
-      return meetingDate <= thirtyDaysFromNow && meetingDate >= sixMonthsAgo;
+      return !isNaN(meetingDate.getTime()) && meetingDate <= now && meetingDate >= sixMonthsAgo;
     })
     .sort((a, b) => {
-      const dateA = new Date(a.activity_start_date || a.activity_date || 0).getTime() || 0;
-      const dateB = new Date(b.activity_start_date || b.activity_date || 0).getTime() || 0;
+      const dateA = new Date(a.activity_start_date || a.activity_date || 0).getTime();
+      const dateB = new Date(b.activity_start_date || b.activity_date || 0).getTime();
       return dateB - dateA;
     })
-    .slice(0, 15);
+    .slice(0, 5);
 
   const decisionsPromises = recentMeetings.map((m) => {
     const meetingId = m.activity_id || m.id.split("/").pop() || "";
@@ -442,7 +343,7 @@ async function getRecentPlenaryDecisions(): Promise<ApiDecision[]> {
       const dateB = b.activity_date ? new Date(b.activity_date).getTime() : 0;
       return dateB - dateA;
     })
-    .slice(0, 50);
+    .slice(0, 20);
 
   apiCache.set(cacheKey, sortedDecisions, CACHE_TTL);
   return sortedDecisions;
@@ -495,7 +396,7 @@ function getDocumentType(reference: string): string {
   return "Adopted";
 }
 
-async function transformDecisions(decisions: ApiDecision[]): Promise<LegislativeProcedure[]> {
+function transformDecisionsLight(decisions: ApiDecision[]): LegislativeProcedure[] {
   const grouped = new Map<string, { dec: ApiDecision; label: string }>();
 
   for (const dec of decisions) {
@@ -511,26 +412,12 @@ async function transformDecisions(decisions: ApiDecision[]): Promise<Legislative
     }
   }
 
-  const titlePromises = Array.from(grouped.entries()).map(async ([ref, { dec, label }]) => {
-    let fetchedTitle: string | null = null;
-    
-    if (isProcedureReference(ref)) {
-      fetchedTitle = await fetchProcedureTitle(ref);
-    } else {
-      fetchedTitle = await fetchDocumentTitle(ref);
-    }
-    
+  return Array.from(grouped.entries()).map(([ref, { dec, label }]) => {
     const fallbackTitle = label.replace(/^.*?-\s*/, "").trim() || `Document ${ref}`;
-    return { ref, dec, title: fetchedTitle || fallbackTitle };
-  });
-
-  const titlesWithDecs = await Promise.all(titlePromises);
-
-  return titlesWithDecs
-    .map(({ ref, dec, title }) => ({
+    return {
       id: dec.id,
       reference: ref,
-      title: title,
+      title: fallbackTitle,
       type: getDocumentType(ref),
       status: "Adopted",
       subjects: [],
@@ -543,7 +430,8 @@ async function transformDecisions(decisions: ApiDecision[]): Promise<Legislative
       lastActivity: dec.activity_date
         ? { date: dec.activity_date, type: "Voted" }
         : undefined,
-    }));
+    };
+  });
 }
 
 export async function getProcedureDetails(procId: string): Promise<ApiProcedureDetailed | null> {
@@ -602,6 +490,28 @@ export function transformMeetings(response: ApiResponse<ApiMeeting>): PlenarySes
       type: "Plenary Session",
     }))
     .sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
+}
+
+function transformProceduresLight(basicProcedures: ApiProcedureBasic[]): LegislativeProcedure[] {
+  return basicProcedures.map((basic) => {
+    let reference = extractReferenceFromLabel(basic.label || "");
+    if (!reference) {
+      const procId = basic.process_id || basic.id.split("/").pop() || "";
+      if (procId) {
+        reference = convertProcedureIdToReference(procId) || procId;
+      }
+    }
+
+    return {
+      id: basic.process_id || basic.id,
+      reference: reference,
+      title: basic.label || "Untitled Procedure",
+      type: getProcedureTypeLabel(basic.process_type),
+      subjects: [],
+      status: "In Progress",
+      sourceUrl: reference ? getProcedureUrl(reference) : undefined,
+    };
+  });
 }
 
 export async function enrichProcedures(basicProcedures: ApiProcedureBasic[]): Promise<LegislativeProcedure[]> {
@@ -692,12 +602,44 @@ export async function getLegislativeProcedures(): Promise<FetchResult<Procedures
       : [];
     
     const inProgress = procedures.filter((p) => p.status !== "Completed");
-    const completed = await transformDecisions(recentDecisions);
+    const completed = transformDecisionsLight(recentDecisions);
     
     return { data: { inProgress, completed }, error: null };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to fetch legislative procedures";
     console.error("Failed to fetch legislative procedures:", error);
     return { data: { inProgress: [], completed: [] }, error: message };
+  }
+}
+
+export async function getInProgressProcedures(): Promise<FetchResult<LegislativeProcedure[]>> {
+  try {
+    const proceduresResponse = await getProcedures();
+    const basicProcedures = proceduresResponse.data || proceduresResponse["@graph"] || [];
+    
+    const firstPage = basicProcedures.slice(0, 6);
+    const rest = basicProcedures.slice(6);
+    
+    const enrichedFirstPage = await enrichProcedures(firstPage);
+    const lightRest = transformProceduresLight(rest);
+    
+    const procedures = [...enrichedFirstPage, ...lightRest];
+    return { data: procedures, error: null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to fetch in-progress procedures";
+    console.error("Failed to fetch in-progress procedures:", error);
+    return { data: [], error: message };
+  }
+}
+
+export async function getCompletedProcedures(): Promise<FetchResult<LegislativeProcedure[]>> {
+  try {
+    const recentDecisions = await getRecentPlenaryDecisions();
+    const completed = transformDecisionsLight(recentDecisions);
+    return { data: completed, error: null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to fetch completed procedures";
+    console.error("Failed to fetch completed procedures:", error);
+    return { data: [], error: message };
   }
 }
