@@ -7,12 +7,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { usePersona } from "@/components/persona-context";
+import { usePersona, type SummaryLocale } from "@/components/persona-context";
 import type { Persona, Country } from "@/types/europarl";
 import { PERSONA_LABELS, COUNTRY_LABELS } from "@/types/europarl";
 
+const LOCALE_LABELS: Record<SummaryLocale, string> = {
+  en: "English",
+  fr: "Français",
+  de: "Deutsch",
+};
+
 export function ContextSelector() {
-  const { persona, country, setPersona, setCountry } = usePersona();
+  const {
+    persona,
+    country,
+    summaryLocale,
+    setPersona,
+    setCountry,
+    setSummaryLocale,
+  } = usePersona();
 
   return (
     <div className="flex flex-col sm:flex-row gap-4 p-4 bg-card rounded-lg border">
@@ -62,7 +75,32 @@ export function ContextSelector() {
           </SelectContent>
         </Select>
       </div>
-      {(persona !== "general" || country !== "general") && (
+      <div className="flex-1">
+        <label
+          htmlFor="locale-select"
+          className="block text-sm font-medium text-muted-foreground mb-2"
+        >
+          Summary language
+        </label>
+        <Select
+          value={summaryLocale}
+          onValueChange={(value) => setSummaryLocale(value as SummaryLocale)}
+        >
+          <SelectTrigger id="locale-select" className="w-full">
+            <SelectValue placeholder="Language" />
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(LOCALE_LABELS) as SummaryLocale[]).map((key) => (
+              <SelectItem key={key} value={key}>
+                {LOCALE_LABELS[key]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {(persona !== "general" ||
+        country !== "general" ||
+        summaryLocale !== "en") && (
         <div className="flex items-end">
           <p className="text-sm text-muted-foreground italic">
             AI summaries will be tailored to your context

@@ -1,7 +1,4 @@
-import type {
-  PlenarySession,
-  LegislativeProcedure,
-} from "@/types/europarl";
+import type { PlenarySession, LegislativeProcedure } from "@/types/europarl";
 import { apiCache, getCacheKey } from "@/lib/cache";
 
 const BASE_URL = "https://data.europarl.europa.eu/api/v2";
@@ -85,7 +82,7 @@ function convertProcedureIdToReference(procId: string): string | null {
 
 function getProcedureTypeLabel(type: string | undefined): string {
   if (!type) return "Procedure";
-  
+
   const typeMap: Record<string, string> = {
     "def/ep-procedure-types/COD": "Codecision",
     "def/ep-procedure-types/CNS": "Consultation",
@@ -100,34 +97,41 @@ function getProcedureTypeLabel(type: string | undefined): string {
     "def/ep-procedure-types/REG": "Rules of Procedure",
     "def/ep-procedure-types/DCE": "Discharge",
   };
-  
+
   return typeMap[type] || type.split("/").pop() || "Procedure";
 }
 
 function getStageLabel(stage: string | undefined): string {
   if (!stage) return "Active";
-  
+
   const stageMap: Record<string, string> = {
-    "http://publications.europa.eu/resource/authority/procedure-phase/RDG1": "1st Reading",
-    "http://publications.europa.eu/resource/authority/procedure-phase/RDG2": "2nd Reading",
-    "http://publications.europa.eu/resource/authority/procedure-phase/RDG3": "3rd Reading",
-    "http://publications.europa.eu/resource/authority/procedure-phase/CONC": "Conciliation",
-    "http://publications.europa.eu/resource/authority/procedure-phase/FIN": "Completed",
+    "http://publications.europa.eu/resource/authority/procedure-phase/RDG1":
+      "1st Reading",
+    "http://publications.europa.eu/resource/authority/procedure-phase/RDG2":
+      "2nd Reading",
+    "http://publications.europa.eu/resource/authority/procedure-phase/RDG3":
+      "3rd Reading",
+    "http://publications.europa.eu/resource/authority/procedure-phase/CONC":
+      "Conciliation",
+    "http://publications.europa.eu/resource/authority/procedure-phase/FIN":
+      "Completed",
   };
-  
+
   return stageMap[stage] || "In Progress";
 }
 
-function extractCommittees(participation: ApiProcedureDetailed["had_participation"]): string[] {
+function extractCommittees(
+  participation: ApiProcedureDetailed["had_participation"]
+): string[] {
   if (!participation || !Array.isArray(participation)) return [];
-  
+
   const committeeRoles = [
     "def/ep-roles/COMMITTEE_RESPONSIBLE",
     "def/ep-roles/COMMITTEE_OPINION",
   ];
-  
+
   const committees: string[] = [];
-  
+
   for (const p of participation) {
     if (!p) continue;
     if (p.participation_role && committeeRoles.includes(p.participation_role)) {
@@ -145,23 +149,30 @@ function extractCommittees(participation: ApiProcedureDetailed["had_participatio
       }
     }
   }
-  
+
   return committees;
 }
 
-function getLatestActivity(consists_of: ApiProcedureDetailed["consists_of"]): { date: string; type: string } | undefined {
-  if (!consists_of || !Array.isArray(consists_of) || consists_of.length === 0) return undefined;
-  
-  const validActivities = consists_of.filter(a => a && a.activity_date);
+function getLatestActivity(
+  consists_of: ApiProcedureDetailed["consists_of"]
+): { date: string; type: string } | undefined {
+  if (!consists_of || !Array.isArray(consists_of) || consists_of.length === 0)
+    return undefined;
+
+  const validActivities = consists_of.filter((a) => a && a.activity_date);
   if (validActivities.length === 0) return undefined;
-  
-  const sorted = validActivities.sort((a, b) => 
-    new Date(b.activity_date!).getTime() - new Date(a.activity_date!).getTime()
+
+  const sorted = validActivities.sort(
+    (a, b) =>
+      new Date(b.activity_date!).getTime() -
+      new Date(a.activity_date!).getTime()
   );
-  
+
   const latest = sorted[0];
-  const activityType = latest.had_activity_type?.split("/").pop()?.replace(/_/g, " ") || "Activity";
-  
+  const activityType =
+    latest.had_activity_type?.split("/").pop()?.replace(/_/g, " ") ||
+    "Activity";
+
   return {
     date: latest.activity_date!,
     type: activityType,
@@ -181,13 +192,17 @@ export async function getMeetings(): Promise<ApiResponse<ApiMeeting>> {
   );
 
   if (!res.ok) {
-    throw new Error(`Failed to fetch meetings: ${res.status} ${res.statusText}`);
+    throw new Error(
+      `Failed to fetch meetings: ${res.status} ${res.statusText}`
+    );
   }
 
   return res.json();
 }
 
-async function fetchProceduresByYear(year: number): Promise<ApiProcedureBasic[]> {
+async function fetchProceduresByYear(
+  year: number
+): Promise<ApiProcedureBasic[]> {
   const cacheKey = getCacheKey("procedures-year", year);
   const cached = apiCache.get<ApiProcedureBasic[]>(cacheKey);
   if (cached) return cached;
@@ -209,7 +224,7 @@ async function fetchProceduresByYear(year: number): Promise<ApiProcedureBasic[]>
 
   const data: ApiResponse<ApiProcedureBasic> = await res.json();
   const procedures = data.data || data["@graph"] || [];
-  
+
   apiCache.set(cacheKey, procedures, CACHE_TTL);
   return procedures;
 }
@@ -249,13 +264,17 @@ async function fetchPlenaryMeetings(year: number): Promise<ApiMeeting[]> {
 
     const data: ApiResponse<ApiMeeting> = await res.json();
     const meetings = data.data || data["@graph"] || [];
-    
+
     const plenaryMeetings = meetings.filter((m) => {
       if (!m.had_activity_type) return true;
       const type = m.had_activity_type.toUpperCase();
-      return type.includes("PLENARY") || type.includes("SITTING") || type.includes("SESSION");
+      return (
+        type.includes("PLENARY") ||
+        type.includes("SITTING") ||
+        type.includes("SESSION")
+      );
     });
-    
+
     apiCache.set(cacheKey, plenaryMeetings, CACHE_TTL);
     return plenaryMeetings;
   } catch (error) {
@@ -264,7 +283,9 @@ async function fetchPlenaryMeetings(year: number): Promise<ApiMeeting[]> {
   }
 }
 
-async function fetchMeetingDecisions(meetingId: string): Promise<ApiDecision[]> {
+async function fetchMeetingDecisions(
+  meetingId: string
+): Promise<ApiDecision[]> {
   const cacheKey = getCacheKey("meeting-decisions", meetingId);
   const cached = apiCache.get<ApiDecision[]>(cacheKey);
   if (cached) return cached;
@@ -284,12 +305,12 @@ async function fetchMeetingDecisions(meetingId: string): Promise<ApiDecision[]> 
 
     const data: ApiResponse<ApiDecision> = await res.json();
     const decisions = data.data || data["@graph"] || [];
-    
+
     const adoptedDecisions = decisions.filter((d) => {
       if (!d.decision_outcome) return (d.number_of_votes_favor || 0) > 0;
       return d.decision_outcome.toUpperCase().includes("ADOPTED");
     });
-    
+
     apiCache.set(cacheKey, adoptedDecisions, CACHE_TTL);
     return adoptedDecisions;
   } catch {
@@ -311,20 +332,28 @@ async function getRecentPlenaryDecisions(): Promise<ApiDecision[]> {
   ]);
 
   const allMeetings = [...currentYearMeetings, ...previousYearMeetings];
-  
+
   const now = new Date();
   const sixMonthsAgo = new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000);
-  
+
   const recentMeetings = allMeetings
     .filter((m) => {
       const dateStr = m.activity_start_date || m.activity_date;
       if (!dateStr) return false;
       const meetingDate = new Date(dateStr);
-      return !isNaN(meetingDate.getTime()) && meetingDate <= now && meetingDate >= sixMonthsAgo;
+      return (
+        !isNaN(meetingDate.getTime()) &&
+        meetingDate <= now &&
+        meetingDate >= sixMonthsAgo
+      );
     })
     .sort((a, b) => {
-      const dateA = new Date(a.activity_start_date || a.activity_date || 0).getTime();
-      const dateB = new Date(b.activity_start_date || b.activity_date || 0).getTime();
+      const dateA = new Date(
+        a.activity_start_date || a.activity_date || 0
+      ).getTime();
+      const dateB = new Date(
+        b.activity_start_date || b.activity_date || 0
+      ).getTime();
       return dateB - dateA;
     })
     .slice(0, 5);
@@ -350,25 +379,123 @@ async function getRecentPlenaryDecisions(): Promise<ApiDecision[]> {
 }
 
 function getProcedureUrl(reference: string): string {
-  return `https://oeil.secure.europarl.europa.eu/oeil/en/procedure-file?reference=${encodeURIComponent(reference)}`;
+  return `https://oeil.secure.europarl.europa.eu/oeil/en/procedure-file?reference=${encodeURIComponent(
+    reference
+  )}`;
+}
+
+function isDocumentReference(reference: string): boolean {
+  return /^[A-Z]\d+-\d+\/\d+$/.test(reference);
+}
+
+function convertToDocumentId(reference: string): string | null {
+  const match = reference.match(/^([A-Z])(\d+)-(\d+)\/(\d+)$/);
+  if (!match) return null;
+  const [, letter, term, num, year] = match;
+  return `${letter}-${term}-${year}-${num.padStart(4, "0")}`;
+}
+
+function convertToProcedureId(reference: string): string {
+  const match = reference.match(/^(\d{4})\/(\d+)\([A-Z]+\)$/);
+  if (!match) return reference.replace(/\//g, "_").replace(/[()]/g, "");
+  const [, year, num] = match;
+  return `${year}-${num}`;
+}
+
+interface ApiDocumentExpression {
+  language?: string;
+  title?: Record<string, string>;
+}
+
+interface ApiDocumentDetail {
+  id: string;
+  is_realized_by?: ApiDocumentExpression[];
+}
+
+async function fetchPlenaryDocumentTitle(
+  reference: string
+): Promise<string | null> {
+  const cacheKey = getCacheKey("plenary-doc-title", reference);
+  const cached = apiCache.get<string>(cacheKey);
+  if (cached != null) return cached;
+
+  const docId = convertToDocumentId(reference);
+  if (!docId) return null;
+
+  try {
+    const res = await fetch(
+      `${BASE_URL}/plenary-documents/${docId}?format=application%2Fld%2Bjson`,
+      {
+        headers: { Accept: "application/ld+json" },
+        next: { revalidate: 3600 },
+      }
+    );
+    if (!res.ok) return null;
+
+    const data: ApiResponse<ApiDocumentDetail> = await res.json();
+    const doc = data.data?.[0] || data["@graph"]?.[0];
+    if (!doc?.is_realized_by?.length) return null;
+
+    const enExpr = doc.is_realized_by.find((e) => e.language?.includes("/ENG"));
+    let title: string | null = null;
+    if (enExpr?.title?.en) {
+      title = enExpr.title.en;
+    } else {
+      const first = doc.is_realized_by[0];
+      title = first?.title ? (Object.values(first.title)[0] as string) : null;
+    }
+    if (!title) return null;
+
+    apiCache.set(cacheKey, title, CACHE_TTL);
+    return title;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchFullTitleForReference(
+  reference: string
+): Promise<string | null> {
+  const cacheKey = getCacheKey("procedure-full-title", reference);
+  const cached = apiCache.get<string>(cacheKey);
+  if (cached != null) return cached;
+
+  let title: string | null = null;
+  if (isDocumentReference(reference)) {
+    title = await fetchPlenaryDocumentTitle(reference);
+  } else if (isProcedureReference(reference)) {
+    const procId = convertToProcedureId(reference);
+    const proc = await getProcedureDetails(procId);
+    title = proc ? getLocalizedLabel(proc.process_title) || null : null;
+  } else {
+    title = await fetchPlenaryDocumentTitle(reference);
+    if (!title) {
+      const procId = convertToProcedureId(reference);
+      const proc = await getProcedureDetails(procId);
+      title = proc ? getLocalizedLabel(proc.process_title) || null : null;
+    }
+  }
+
+  if (title) apiCache.set(cacheKey, title, CACHE_TTL);
+  return title;
 }
 
 function extractReferenceFromLabel(label: string | undefined): string {
   if (!label) return "";
   const trimmed = label.trim();
-  
+
   const docMatch = trimmed.match(/([A-Z]\d+-\d+\/\d+)/);
   if (docMatch) return docMatch[1];
-  
+
   const procMatch = trimmed.match(/(\d{4}\/\d+\([A-Z]+\))/);
   if (procMatch) return procMatch[1];
-  
+
   const altDocMatch = trimmed.match(/([A-Z]\d+-\d{4}-\d+)/);
   if (altDocMatch) return altDocMatch[1];
-  
+
   if (/^[A-Z]\d+-\d+\/\d+$/.test(trimmed)) return trimmed;
   if (/^\d{4}\/\d+\([A-Z]+\)$/.test(trimmed)) return trimmed;
-  
+
   return "";
 }
 
@@ -376,7 +503,7 @@ function getDocumentType(reference: string): string {
   if (reference.startsWith("A")) return "Report";
   if (reference.startsWith("B")) return "Resolution";
   if (reference.startsWith("C")) return "Communication";
-  
+
   if (isProcedureReference(reference)) {
     const typeMatch = reference.match(/\(([A-Z]+)\)/);
     const typeCode = typeMatch?.[1] || "";
@@ -392,11 +519,13 @@ function getDocumentType(reference: string): string {
     };
     return typeMap[typeCode] || "Procedure";
   }
-  
+
   return "Adopted";
 }
 
-function transformDecisionsLight(decisions: ApiDecision[]): LegislativeProcedure[] {
+function transformDecisionsLight(
+  decisions: ApiDecision[]
+): LegislativeProcedure[] {
   const grouped = new Map<string, { dec: ApiDecision; label: string }>();
 
   for (const dec of decisions) {
@@ -413,11 +542,15 @@ function transformDecisionsLight(decisions: ApiDecision[]): LegislativeProcedure
   }
 
   return Array.from(grouped.entries()).map(([ref, { dec, label }]) => {
-    const fallbackTitle = label.replace(/^.*?-\s*/, "").trim() || `Document ${ref}`;
+    const afterRef = label.startsWith(ref)
+      ? label.slice(ref.length).trim()
+      : label.trim();
+    const title =
+      afterRef.replace(/^[\s\-–—]+/, "").trim() || `Document ${ref}`;
     return {
       id: dec.id,
       reference: ref,
-      title: fallbackTitle,
+      title,
       type: getDocumentType(ref),
       status: "Adopted",
       subjects: [],
@@ -434,7 +567,9 @@ function transformDecisionsLight(decisions: ApiDecision[]): LegislativeProcedure
   });
 }
 
-export async function getProcedureDetails(procId: string): Promise<ApiProcedureDetailed | null> {
+export async function getProcedureDetails(
+  procId: string
+): Promise<ApiProcedureDetailed | null> {
   const cacheKey = getCacheKey("procedure-details", procId);
   const cached = apiCache.get<ApiProcedureDetailed>(cacheKey);
   if (cached) return cached;
@@ -457,7 +592,7 @@ export async function getProcedureDetails(procId: string): Promise<ApiProcedureD
 
     const data: ApiResponse<ApiProcedureDetailed> = await res.json();
     const procedure = data.data?.[0] || null;
-    
+
     if (procedure) {
       apiCache.set(cacheKey, procedure, CACHE_TTL);
     }
@@ -468,7 +603,9 @@ export async function getProcedureDetails(procId: string): Promise<ApiProcedureD
   }
 }
 
-export function transformMeetings(response: ApiResponse<ApiMeeting>): PlenarySession[] {
+export function transformMeetings(
+  response: ApiResponse<ApiMeeting>
+): PlenarySession[] {
   const meetings = response.data || response["@graph"] || [];
 
   if (meetings.length === 0) {
@@ -485,14 +622,20 @@ export function transformMeetings(response: ApiResponse<ApiMeeting>): PlenarySes
     .map((meeting) => ({
       id: meeting.activity_id || meeting.id,
       title: getLocalizedLabel(meeting.activity_label),
-      startDate: new Date(meeting.activity_start_date || meeting.activity_date || Date.now()),
-      endDate: new Date(meeting.activity_end_date || meeting.activity_date || Date.now()),
+      startDate: new Date(
+        meeting.activity_start_date || meeting.activity_date || Date.now()
+      ),
+      endDate: new Date(
+        meeting.activity_end_date || meeting.activity_date || Date.now()
+      ),
       type: "Plenary Session",
     }))
     .sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
 }
 
-function transformProceduresLight(basicProcedures: ApiProcedureBasic[]): LegislativeProcedure[] {
+function transformProceduresLight(
+  basicProcedures: ApiProcedureBasic[]
+): LegislativeProcedure[] {
   return basicProcedures.map((basic) => {
     let reference = extractReferenceFromLabel(basic.label || "");
     if (!reference) {
@@ -514,32 +657,38 @@ function transformProceduresLight(basicProcedures: ApiProcedureBasic[]): Legisla
   });
 }
 
-export async function enrichProcedures(basicProcedures: ApiProcedureBasic[]): Promise<LegislativeProcedure[]> {
+export async function enrichProcedures(
+  basicProcedures: ApiProcedureBasic[]
+): Promise<LegislativeProcedure[]> {
   const enrichedProcedures: LegislativeProcedure[] = [];
-  
-  const detailsPromises = basicProcedures.map(proc => {
+
+  const detailsPromises = basicProcedures.map((proc) => {
     const procId = proc.process_id || proc.id.split("/").pop() || "";
     return getProcedureDetails(procId);
   });
-  
+
   const details = await Promise.all(detailsPromises);
-  
+
   for (let i = 0; i < basicProcedures.length; i++) {
     const basic = basicProcedures[i];
     const detailed = details[i];
-    
-    const title = detailed?.process_title 
+
+    const title = detailed?.process_title
       ? getLocalizedLabel(detailed.process_title)
       : basic.label || "Untitled Procedure";
-    
+
     const summary = detailed?.process_summary
       ? getLocalizedLabel(detailed.process_summary)
       : undefined;
-    
-    const committees = detailed ? extractCommittees(detailed.had_participation) : [];
-    const lastActivity = detailed ? getLatestActivity(detailed.consists_of) : undefined;
+
+    const committees = detailed
+      ? extractCommittees(detailed.had_participation)
+      : [];
+    const lastActivity = detailed
+      ? getLatestActivity(detailed.consists_of)
+      : undefined;
     const status = detailed ? getStageLabel(detailed.current_stage) : "Active";
-    
+
     let reference = extractReferenceFromLabel(basic.label || "");
     if (!reference) {
       const procId = basic.process_id || basic.id.split("/").pop() || "";
@@ -547,7 +696,7 @@ export async function enrichProcedures(basicProcedures: ApiProcedureBasic[]): Pr
         reference = convertProcedureIdToReference(procId) || procId;
       }
     }
-    
+
     enrichedProcedures.push({
       id: basic.process_id || basic.id,
       reference: reference,
@@ -560,7 +709,7 @@ export async function enrichProcedures(basicProcedures: ApiProcedureBasic[]): Pr
       lastActivity: lastActivity,
     });
   }
-  
+
   return enrichedProcedures;
 }
 
@@ -569,7 +718,9 @@ export interface FetchResult<T> {
   error: string | null;
 }
 
-export async function getUpcomingPlenarySessions(): Promise<FetchResult<PlenarySession[]>> {
+export async function getUpcomingPlenarySessions(): Promise<
+  FetchResult<PlenarySession[]>
+> {
   try {
     const response = await getMeetings();
     const sessions = transformMeetings(response);
@@ -577,7 +728,10 @@ export async function getUpcomingPlenarySessions(): Promise<FetchResult<PlenaryS
     const upcoming = sessions.filter((session) => session.startDate >= now);
     return { data: upcoming, error: null };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to fetch plenary sessions";
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to fetch plenary sessions";
     console.error("Failed to fetch plenary sessions:", error);
     return { data: [], error: message };
   }
@@ -588,57 +742,79 @@ export interface ProceduresData {
   completed: LegislativeProcedure[];
 }
 
-export async function getLegislativeProcedures(): Promise<FetchResult<ProceduresData>> {
+export async function getLegislativeProcedures(): Promise<
+  FetchResult<ProceduresData>
+> {
   try {
     const [proceduresResponse, recentDecisions] = await Promise.all([
       getProcedures(),
       getRecentPlenaryDecisions(),
     ]);
 
-    const basicProcedures = proceduresResponse.data || proceduresResponse["@graph"] || [];
-    
-    const procedures = basicProcedures.length > 0 
-      ? await enrichProcedures(basicProcedures)
-      : [];
-    
+    const basicProcedures =
+      proceduresResponse.data || proceduresResponse["@graph"] || [];
+
+    const procedures =
+      basicProcedures.length > 0 ? await enrichProcedures(basicProcedures) : [];
+
     const inProgress = procedures.filter((p) => p.status !== "Completed");
     const completed = transformDecisionsLight(recentDecisions);
-    
+
     return { data: { inProgress, completed }, error: null };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to fetch legislative procedures";
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to fetch legislative procedures";
     console.error("Failed to fetch legislative procedures:", error);
     return { data: { inProgress: [], completed: [] }, error: message };
   }
 }
 
-export async function getInProgressProcedures(): Promise<FetchResult<LegislativeProcedure[]>> {
+export async function getInProgressProcedures(): Promise<
+  FetchResult<LegislativeProcedure[]>
+> {
   try {
     const proceduresResponse = await getProcedures();
-    const basicProcedures = proceduresResponse.data || proceduresResponse["@graph"] || [];
-    
+    const basicProcedures =
+      proceduresResponse.data || proceduresResponse["@graph"] || [];
+
     const firstPage = basicProcedures.slice(0, 6);
     const rest = basicProcedures.slice(6);
-    
+
     const enrichedFirstPage = await enrichProcedures(firstPage);
     const lightRest = transformProceduresLight(rest);
-    
+
     const procedures = [...enrichedFirstPage, ...lightRest];
     return { data: procedures, error: null };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to fetch in-progress procedures";
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to fetch in-progress procedures";
     console.error("Failed to fetch in-progress procedures:", error);
     return { data: [], error: message };
   }
 }
 
-export async function getCompletedProcedures(): Promise<FetchResult<LegislativeProcedure[]>> {
+export async function getCompletedProcedures(): Promise<
+  FetchResult<LegislativeProcedure[]>
+> {
   try {
     const recentDecisions = await getRecentPlenaryDecisions();
     const completed = transformDecisionsLight(recentDecisions);
-    return { data: completed, error: null };
+    const enriched = await Promise.all(
+      completed.map(async (p) => {
+        const fullTitle = await fetchFullTitleForReference(p.reference);
+        return { ...p, title: fullTitle ?? p.title };
+      })
+    );
+    return { data: enriched, error: null };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to fetch completed procedures";
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to fetch completed procedures";
     console.error("Failed to fetch completed procedures:", error);
     return { data: [], error: message };
   }

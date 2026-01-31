@@ -60,7 +60,9 @@ export function ProceduresList({
         const matchesSearch =
           proc.title.toLowerCase().includes(query) ||
           (proc.summary?.toLowerCase().includes(query) ?? false) ||
-          proc.reference.toLowerCase().includes(query);
+          proc.reference.toLowerCase().includes(query) ||
+          (proc.subjects?.some((s) => s.toLowerCase().includes(query)) ??
+            false);
         if (!matchesSearch) return false;
       }
       if (typeFilter !== "all" && proc.type !== typeFilter) return false;

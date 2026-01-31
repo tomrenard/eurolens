@@ -1,14 +1,36 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { ExternalLink, Calendar, ThumbsUp, ThumbsDown, MinusCircle, RefreshCw } from "lucide-react";
+import {
+  ExternalLink,
+  Calendar,
+  ThumbsUp,
+  ThumbsDown,
+  MinusCircle,
+  RefreshCw,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ActionPanel } from "@/components/action-panel";
+import { ProcedureTimeline } from "@/components/procedure-timeline";
+import { MEPVotesList } from "@/components/mep-votes-list";
+import { AuthButton } from "@/components/auth-button";
 import { formatRelativeDate } from "@/lib/utils";
+import { usePersona } from "@/components/persona-context";
+import { createClient } from "@/lib/supabase/client";
 import type { VotingResult, Persona, Country } from "@/types/europarl";
+import type { MEPVote } from "@/types/europarl";
+import type { User } from "@supabase/supabase-js";
+
+interface TimelineEvent {
+  id: string;
+  date: string;
+  type: string;
+  title: string;
+  description?: string;
+}
 
 interface ProcedureData {
   reference: string;
@@ -22,6 +44,7 @@ interface ProcedureData {
     date: string;
     type: string;
   };
+  timeline?: TimelineEvent[];
 }
 
 interface ProcedureDetailProps {
@@ -106,7 +129,9 @@ function VotingResultsCard({ votingResult }: { votingResult: VotingResult }) {
           <div className="space-y-1">
             <div className="flex items-center justify-center gap-2">
               <MinusCircle className="h-5 w-5 text-gray-400" />
-              <span className="text-2xl font-bold text-gray-600">{abstention}</span>
+              <span className="text-2xl font-bold text-gray-600">
+                {abstention}
+              </span>
             </div>
             <p className="text-sm text-muted-foreground">Abstention</p>
           </div>
@@ -116,21 +141,23 @@ function VotingResultsCard({ votingResult }: { votingResult: VotingResult }) {
   );
 }
 
-function AISummaryCard({ 
-  procedure, 
-  persona, 
-  country 
-}: { 
-  procedure: ProcedureData; 
-  persona: Persona; 
+function AISummaryCard({
+  procedure,
+  persona,
+  country,
+  summaryLocale,
+}: {
+  procedure: ProcedureData;
+  persona: Persona;
   country: Country;
+  summaryLocale: string;
 }) {
   const [completion, setCompletion] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isCached, setIsCached] = useState(false);
 
-  const cacheKey = `eurolens-summary-${procedure.reference}-${persona}-${country}`;
+  const cacheKey = `eurolens-summary-${procedure.reference}-${persona}-${country}-${summaryLocale}`;
 
   useEffect(() => {
     try {
@@ -160,12 +187,22 @@ function AISummaryCard({
           subjects: [],
           persona,
           country,
+          locale: summaryLocale,
         }),
       });
 
       if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(errorData || `HTTP ${response.status}`);
+        const text = await response.text();
+        if (response.status === 401) {
+          try {
+            const data = JSON.parse(text) as { error?: string };
+            throw new Error(data.error ?? "Sign in to use AI summaries");
+          } catch (e) {
+            if (e instanceof Error && e.message.includes("Sign in")) throw e;
+            throw new Error("Sign in to use AI summaries");
+          }
+        }
+        throw new Error(text || `HTTP ${response.status}`);
       }
 
       if (!response.body) {
@@ -196,7 +233,7 @@ function AISummaryCard({
     } finally {
       setIsLoading(false);
     }
-  }, [cacheKey, procedure, persona, country]);
+  }, [cacheKey, procedure, persona, country, summaryLocale]);
 
   return (
     <Card>
@@ -208,14 +245,23 @@ function AISummaryCard({
           <div className="text-destructive text-sm space-y-2">
             <p className="font-medium">Failed to generate summary</p>
             <p className="text-xs opacity-80">{error}</p>
-            <Button onClick={requestSummary} variant="outline" size="sm" className="mt-2">
+            <Button
+              onClick={requestSummary}
+              variant="outline"
+              size="sm"
+              className="mt-2"
+            >
               Retry
             </Button>
           </div>
         )}
 
         {!completion && !isLoading && !error && (
-          <Button onClick={requestSummary} variant="secondary" className="w-full">
+          <Button
+            onClick={requestSummary}
+            variant="secondary"
+            className="w-full"
+          >
             Generate AI Summary
           </Button>
         )}
@@ -234,14 +280,20 @@ function AISummaryCard({
               {completion.split("\n").map((line, idx) => {
                 if (line.startsWith("## ")) {
                   return (
-                    <h4 key={idx} className="font-semibold text-primary mt-3 first:mt-0">
+                    <h4
+                      key={idx}
+                      className="font-semibold text-primary mt-3 first:mt-0"
+                    >
                       {line.replace("## ", "")}
                     </h4>
                   );
                 }
                 if (line.trim()) {
                   return (
-                    <p key={idx} className="text-muted-foreground leading-relaxed">
+                    <p
+                      key={idx}
+                      className="text-muted-foreground leading-relaxed"
+                    >
                       {line}
                     </p>
                   );
@@ -254,8 +306,15 @@ function AISummaryCard({
             )}
             {isCached && !isLoading && (
               <div className="flex items-center gap-2 pt-3 border-t">
-                <span className="text-xs text-muted-foreground">Cached summary</span>
-                <Button onClick={requestSummary} variant="ghost" size="sm" className="h-6 px-2 text-xs">
+                <span className="text-xs text-muted-foreground">
+                  Cached summary
+                </span>
+                <Button
+                  onClick={requestSummary}
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                >
                   <RefreshCw className="h-3 w-3 mr-1" />
                   Regenerate
                 </Button>
@@ -269,14 +328,32 @@ function AISummaryCard({
 }
 
 export function ProcedureDetail({ reference }: ProcedureDetailProps) {
+  const { persona, country, summaryLocale } = usePersona();
   const [procedure, setProcedure] = useState<ProcedureData | null>(null);
+  const [votes, setVotes] = useState<MEPVote[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   useEffect(() => {
     async function fetchProcedure() {
       try {
-        const response = await fetch(`/api/procedure/${encodeURIComponent(reference)}`);
+        const response = await fetch(
+          `/api/procedure/${encodeURIComponent(reference)}`
+        );
         if (!response.ok) {
           throw new Error("Failed to fetch procedure");
         }
@@ -291,6 +368,27 @@ export function ProcedureDetail({ reference }: ProcedureDetailProps) {
 
     fetchProcedure();
   }, [reference]);
+
+  useEffect(() => {
+    if (!procedure?.votingResult) return;
+    let cancelled = false;
+    async function fetchVotes() {
+      try {
+        const res = await fetch(
+          `/api/procedure/${encodeURIComponent(reference)}/votes`
+        );
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled && Array.isArray(data.votes)) setVotes(data.votes);
+      } catch {
+        // Votes endpoint returns [] until EP roll-call source is integrated
+      }
+    }
+    fetchVotes();
+    return () => {
+      cancelled = true;
+    };
+  }, [reference, procedure?.votingResult]);
 
   if (isLoading) {
     return (
@@ -332,11 +430,11 @@ export function ProcedureDetail({ reference }: ProcedureDetailProps) {
             {procedure.status}
           </Badge>
         </div>
-        
+
         <p className="text-sm text-muted-foreground font-mono mb-2">
           {procedure.reference}
         </p>
-        
+
         <h1 className="text-2xl sm:text-3xl font-bold leading-tight">
           {procedure.title}
         </h1>
@@ -344,7 +442,9 @@ export function ProcedureDetail({ reference }: ProcedureDetailProps) {
         {procedure.lastActivity && (
           <div className="flex items-center gap-2 mt-4 text-sm text-muted-foreground">
             <Calendar className="h-4 w-4" />
-            <span>Last activity: {formatRelativeDate(procedure.lastActivity.date)}</span>
+            <span>
+              Last activity: {formatRelativeDate(procedure.lastActivity.date)}
+            </span>
             <span className="text-muted-foreground/50">•</span>
             <span>{procedure.lastActivity.type}</span>
           </div>
@@ -356,9 +456,9 @@ export function ProcedureDetail({ reference }: ProcedureDetailProps) {
           <CardTitle className="text-lg">Take Action</CardTitle>
         </CardHeader>
         <CardContent>
-          <ActionPanel 
-            procedureId={procedure.reference} 
-            procedureTitle={procedure.title} 
+          <ActionPanel
+            procedureId={procedure.reference}
+            procedureTitle={procedure.title}
             procedureReference={procedure.reference}
             variant="full"
           />
@@ -369,23 +469,97 @@ export function ProcedureDetail({ reference }: ProcedureDetailProps) {
         <VotingResultsCard votingResult={procedure.votingResult} />
       )}
 
-      <AISummaryCard procedure={procedure} persona="general" country="general" />
+      {votes.length > 0 && <MEPVotesList votes={votes} />}
 
-      {procedure.sourceUrl && (
+      {procedure.timeline && procedure.timeline.length > 0 && (
+        <ProcedureTimeline events={procedure.timeline} />
+      )}
+
+      {user ? (
+        <AISummaryCard
+          procedure={procedure}
+          persona={persona}
+          country={country}
+          summaryLocale={summaryLocale}
+        />
+      ) : (
         <Card>
-          <CardContent className="pt-6">
+          <CardHeader>
+            <CardTitle className="text-lg">AI Summary</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground mb-3">
+              Sign in to get a personalized AI summary of this procedure.
+            </p>
+            <AuthButton />
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Document trail</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {procedure.sourceUrl && (
             <a
               href={procedure.sourceUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 text-primary hover:underline font-medium"
+              className="flex items-center gap-2 text-primary hover:underline font-medium"
             >
-              <ExternalLink className="h-4 w-4" />
-              View on European Parliament Website
+              <ExternalLink className="h-4 w-4 shrink-0" />
+              View procedure file on European Parliament (OEIL)
             </a>
-          </CardContent>
-        </Card>
-      )}
+          )}
+          <a
+            href={`https://eur-lex.europa.eu/search.html?qid=0&DB_CODED=LEGISLATION&DB_YEAR=${
+              procedure.reference.match(/\d{4}/)?.[0] ?? ""
+            }&DC_CODED=${encodeURIComponent(procedure.reference)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-primary hover:underline font-medium"
+          >
+            <ExternalLink className="h-4 w-4 shrink-0" />
+            Search on EUR-Lex
+          </a>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Related links</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <a
+            href="https://www.consilium.europa.eu"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-primary hover:underline font-medium"
+          >
+            <ExternalLink className="h-4 w-4 shrink-0" />
+            Council of the European Union
+          </a>
+          <a
+            href="https://ec.europa.eu/info/law/better-regulation/have-your-say_en"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-primary hover:underline font-medium"
+          >
+            <ExternalLink className="h-4 w-4 shrink-0" />
+            Commission – Have your say (consultations)
+          </a>
+          <a
+            href="https://citizens-initiative.europa.eu/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-primary hover:underline font-medium"
+          >
+            <ExternalLink className="h-4 w-4 shrink-0" />
+            European Citizens’ Initiative (petitions)
+          </a>
+        </CardContent>
+      </Card>
     </div>
   );
 }

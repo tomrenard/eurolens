@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Leaderboard } from "@/components/leaderboard";
 import { AchievementsGrid } from "@/components/achievements-grid";
 import { PositionHistory } from "@/components/position-history";
+import { SignInHint } from "@/components/sign-in-hint";
 
 export const metadata = {
   title: "Leaderboard | EuroLens",
@@ -28,7 +29,9 @@ export default function LeaderboardPage() {
               <Trophy className="h-8 w-8 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl md:text-3xl font-bold text-foreground">Leaderboard & Progress</h1>
+              <h1 className="text-2xl md:text-3xl font-bold text-foreground">
+                Leaderboard & Progress
+              </h1>
               <p className="text-muted-foreground">
                 Track your journey through EU democracy
               </p>
@@ -37,7 +40,8 @@ export default function LeaderboardPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <SignInHint variant="leaderboard" />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
         <div className="lg:col-span-2 space-y-6">
           <Leaderboard />
           <AchievementsGrid />

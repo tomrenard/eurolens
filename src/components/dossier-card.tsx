@@ -17,13 +17,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DossierSkeleton } from "@/components/dossier-skeleton";
 import { ActionPanel } from "@/components/action-panel";
+import { AuthButton } from "@/components/auth-button";
 import { formatRelativeDate, isRecentDate } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 import type {
   LegislativeProcedure,
   Persona,
   Country,
   VotingResult,
 } from "@/types/europarl";
+import type { User } from "@supabase/supabase-js";
 
 interface VotingBarProps {
   votingResult: VotingResult;
@@ -111,6 +114,20 @@ export function DossierCard({
   const [error, setError] = useState<string | null>(null);
   const [lastContext, setLastContext] = useState<string | null>(null);
   const [isCached, setIsCached] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   const currentContext = `${procedure.id}-${persona}-${country}`;
   const cacheKey = getCacheKey(procedure.id, persona, country);
@@ -151,8 +168,17 @@ export function DossierCard({
       });
 
       if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(errorData || `HTTP ${response.status}`);
+        const text = await response.text();
+        if (response.status === 401) {
+          try {
+            const data = JSON.parse(text) as { error?: string };
+            throw new Error(data.error ?? "Sign in to use AI summaries");
+          } catch (e) {
+            if (e instanceof Error && e.message.includes("Sign in")) throw e;
+            throw new Error("Sign in to use AI summaries");
+          }
+        }
+        throw new Error(text || `HTTP ${response.status}`);
       }
 
       if (!response.body) {
@@ -187,6 +213,17 @@ export function DossierCard({
   }, [currentContext, cacheKey, procedure, persona, country]);
 
   const renderSummary = () => {
+    if (!user) {
+      return (
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            Sign in to generate an AI summary.
+          </p>
+          <AuthButton />
+        </div>
+      );
+    }
+
     if (error) {
       const isRateLimit =
         error.includes("429") ||
@@ -309,12 +346,25 @@ export function DossierCard({
       <CardHeader className="pb-3 space-y-3">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
           <div className="flex-1 min-w-0 order-2 sm:order-1">
-            <p className="text-xs text-muted-foreground font-mono mb-1">
-              {procedure.reference}
-            </p>
-            <CardTitle className="text-base sm:text-lg leading-tight">
-              {procedure.title}
-            </CardTitle>
+            {procedure.votingResult ? (
+              <>
+                <CardTitle className="text-base sm:text-lg leading-tight">
+                  {procedure.title}
+                </CardTitle>
+                <p className="text-xs text-muted-foreground font-mono mt-1">
+                  {procedure.reference}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground font-mono mb-1">
+                  {procedure.reference}
+                </p>
+                <CardTitle className="text-base sm:text-lg leading-tight">
+                  {procedure.title}
+                </CardTitle>
+              </>
+            )}
             {procedure.summary && (
               <p className="text-sm text-muted-foreground mt-2 line-clamp-3">
                 {procedure.summary}

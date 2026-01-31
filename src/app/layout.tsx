@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { PersonaProvider } from "@/components/persona-context";
+import { Navbar } from "@/components/navbar";
 import "./globals.css";
 
 const inter = Inter({
@@ -26,7 +28,8 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "EuroLens - Your Voice in Brussels",
-    description: "Understand EU policy, take action, and make your voice heard. Contact MEPs, join consultations, and shape European democracy.",
+    description:
+      "Understand EU policy, take action, and make your voice heard. Contact MEPs, join consultations, and shape European democracy.",
     type: "website",
     locale: "en_US",
     siteName: "EuroLens",
@@ -34,7 +37,8 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "EuroLens - Your Voice in Brussels",
-    description: "Understand EU policy, take action, and make your voice heard. Contact MEPs, join consultations, and shape European democracy.",
+    description:
+      "Understand EU policy, take action, and make your voice heard. Contact MEPs, join consultations, and shape European democracy.",
   },
 };
 
@@ -45,8 +49,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#003399" />
+      </head>
       <body className={`${inter.variable} font-sans antialiased`}>
-        {children}
+        <PersonaProvider>
+          <Navbar />
+          {children}
+        </PersonaProvider>
       </body>
     </html>
   );

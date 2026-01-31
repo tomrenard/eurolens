@@ -1,0 +1,17 @@
+{
+  "name": "EuroLens",
+  "short_name": "EuroLens",
+  "description": "Understand EU legislation, take a stance, and make your voice heard. Contact MEPs, join consultations, and earn XP for civic engagement.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F5F5F5",
+  "theme_color": "#003399",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

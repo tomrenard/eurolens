@@ -25,6 +25,14 @@ interface ApiProcedureDetailed {
   }>;
 }
 
+export interface TimelineEvent {
+  id: string;
+  date: string;
+  type: string;
+  title: string;
+  description?: string;
+}
+
 interface ApiResponse<T> {
   data?: T[];
   "@graph"?: T[];
@@ -54,10 +62,10 @@ function convertToDocumentId(reference: string): string | null {
 }
 
 function convertToProcedureId(reference: string): string {
-  const match = reference.match(/^(\d{4})\/(\d+)\(([A-Z]+)\)$/);
+  const match = reference.match(/^(\d{4})\/(\d+)\([A-Z]+\)$/);
   if (!match) return reference.replace(/\//g, "_").replace(/[()]/g, "");
-  const [, year, num, type] = match;
-  return `${year}_${num.padStart(4, "0")}_${type}`;
+  const [, year, num] = match;
+  return `${year}-${num}`;
 }
 
 function getDocumentType(reference: string): string {
@@ -84,20 +92,27 @@ function getDocumentType(reference: string): string {
 
 function getStageLabel(stage: string | undefined): string {
   if (!stage) return "In Progress";
-  
+
   const stageMap: Record<string, string> = {
-    "http://publications.europa.eu/resource/authority/procedure-phase/RDG1": "1st Reading",
-    "http://publications.europa.eu/resource/authority/procedure-phase/RDG2": "2nd Reading",
-    "http://publications.europa.eu/resource/authority/procedure-phase/RDG3": "3rd Reading",
-    "http://publications.europa.eu/resource/authority/procedure-phase/CONC": "Conciliation",
-    "http://publications.europa.eu/resource/authority/procedure-phase/FIN": "Completed",
+    "http://publications.europa.eu/resource/authority/procedure-phase/RDG1":
+      "1st Reading",
+    "http://publications.europa.eu/resource/authority/procedure-phase/RDG2":
+      "2nd Reading",
+    "http://publications.europa.eu/resource/authority/procedure-phase/RDG3":
+      "3rd Reading",
+    "http://publications.europa.eu/resource/authority/procedure-phase/CONC":
+      "Conciliation",
+    "http://publications.europa.eu/resource/authority/procedure-phase/FIN":
+      "Completed",
   };
-  
+
   return stageMap[stage] || "In Progress";
 }
 
 function getProcedureUrl(reference: string): string {
-  return `https://oeil.secure.europarl.europa.eu/oeil/en/procedure-file?reference=${encodeURIComponent(reference)}`;
+  return `https://oeil.secure.europarl.europa.eu/oeil/en/procedure-file?reference=${encodeURIComponent(
+    reference
+  )}`;
 }
 
 async function fetchDocumentDetails(reference: string): Promise<{
@@ -125,7 +140,7 @@ async function fetchDocumentDetails(reference: string): Promise<{
 
     const enExpr = doc.is_realized_by.find((e) => e.language?.includes("/ENG"));
     let title: string | null = null;
-    
+
     if (enExpr?.title?.en) {
       title = enExpr.title.en;
     } else {
@@ -149,12 +164,37 @@ async function fetchDocumentDetails(reference: string): Promise<{
   }
 }
 
+function buildTimelineFromConsistsOf(
+  consists_of: ApiProcedureDetailed["consists_of"]
+): TimelineEvent[] {
+  if (!consists_of || !Array.isArray(consists_of)) return [];
+  const valid = consists_of.filter((a) => a && a.activity_date);
+  if (valid.length === 0) return [];
+  const sorted = [...valid].sort(
+    (a, b) =>
+      new Date(b.activity_date!).getTime() -
+      new Date(a.activity_date!).getTime()
+  );
+  return sorted.map((a, idx) => {
+    const typeLabel =
+      a.had_activity_type?.split("/").pop()?.replace(/_/g, " ") || "Activity";
+    return {
+      id: `evt-${idx}-${a.activity_date}`,
+      date: a.activity_date!,
+      type: typeLabel,
+      title: typeLabel,
+      description: undefined,
+    };
+  });
+}
+
 async function fetchProcedureDetails(reference: string): Promise<{
   title: string;
   summary?: string;
   type: string;
   status: string;
   lastActivity?: { date: string; type: string };
+  timeline: TimelineEvent[];
 } | null> {
   const procId = convertToProcedureId(reference);
 
@@ -177,18 +217,10 @@ async function fetchProcedureDetails(reference: string): Promise<{
     const status = getStageLabel(proc.current_stage);
 
     let lastActivity: { date: string; type: string } | undefined;
-    if (proc.consists_of && proc.consists_of.length > 0) {
-      const validActivities = proc.consists_of.filter((a) => a && a.activity_date);
-      if (validActivities.length > 0) {
-        const sorted = validActivities.sort(
-          (a, b) => new Date(b.activity_date!).getTime() - new Date(a.activity_date!).getTime()
-        );
-        const latest = sorted[0];
-        lastActivity = {
-          date: latest.activity_date!,
-          type: latest.had_activity_type?.split("/").pop()?.replace(/_/g, " ") || "Activity",
-        };
-      }
+    const timeline = buildTimelineFromConsistsOf(proc.consists_of);
+    if (timeline.length > 0) {
+      const latest = timeline[0];
+      lastActivity = { date: latest.date, type: latest.type };
     }
 
     return {
@@ -197,6 +229,7 @@ async function fetchProcedureDetails(reference: string): Promise<{
       type: getDocumentType(reference),
       status,
       lastActivity,
+      timeline,
     };
   } catch {
     return null;
@@ -224,6 +257,7 @@ export async function GET(
       type: string;
       status: string;
       lastActivity?: { date: string; type: string };
+      timeline?: TimelineEvent[];
     } | null = null;
 
     if (isDocumentReference(decodedReference)) {
@@ -244,7 +278,11 @@ export async function GET(
         title: `Procedure ${decodedReference}`,
         type: getDocumentType(decodedReference),
         status: "In Progress",
+        timeline: [],
       };
+    }
+    if (!("timeline" in details)) {
+      (details as { timeline: TimelineEvent[] }).timeline = [];
     }
 
     const procedure = {

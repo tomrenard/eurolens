@@ -43,7 +43,7 @@ export async function SessionSection() {
   }
 
   return (
-    <section aria-labelledby="countdown-heading">
+    <section className="h-full" aria-labelledby="countdown-heading">
       <h2 id="countdown-heading" className="sr-only">
         Next Plenary Session
       </h2>

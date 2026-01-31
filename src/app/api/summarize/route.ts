@@ -1,5 +1,6 @@
 import { streamText } from "ai";
 import { google } from "@ai-sdk/google";
+import { createClient } from "@/lib/supabase/server";
 import type { Persona, Country } from "@/types/europarl";
 import { PERSONA_LABELS, COUNTRY_LABELS } from "@/types/europarl";
 
@@ -13,16 +14,20 @@ function getClientIp(req: Request): string {
   if (forwardedFor) {
     return forwardedFor.split(",")[0].trim();
   }
-  
+
   const realIp = req.headers.get("x-real-ip");
   if (realIp) {
     return realIp;
   }
-  
+
   return "unknown";
 }
 
-function checkRateLimit(ip: string): { allowed: boolean; remaining: number; resetIn: number } {
+function checkRateLimit(ip: string): {
+  allowed: boolean;
+  remaining: number;
+  resetIn: number;
+} {
   const now = Date.now();
   const record = rateLimitMap.get(ip);
 
@@ -32,18 +37,18 @@ function checkRateLimit(ip: string): { allowed: boolean; remaining: number; rese
   }
 
   if (record.count >= RATE_LIMIT) {
-    return { 
-      allowed: false, 
-      remaining: 0, 
-      resetIn: record.resetTime - now 
+    return {
+      allowed: false,
+      remaining: 0,
+      resetIn: record.resetTime - now,
     };
   }
 
   record.count++;
-  return { 
-    allowed: true, 
-    remaining: RATE_LIMIT - record.count, 
-    resetIn: record.resetTime - now 
+  return {
+    allowed: true,
+    remaining: RATE_LIMIT - record.count,
+    resetIn: record.resetTime - now,
   };
 }
 
@@ -103,7 +108,8 @@ function buildSystemPrompt(persona: Persona, country: Country): string {
 function buildUserPrompt(
   title: string,
   summary: string,
-  subjects: string[]
+  subjects: string[],
+  locale: string = "en"
 ): string {
   let prompt = `Summarize this EU legislation for a general audience.
 
@@ -115,7 +121,15 @@ function buildUserPrompt(
     prompt += `\n\n**Policy Areas:** ${subjects.join(", ")}`;
   }
 
+  const languageNames: Record<string, string> = {
+    en: "English",
+    fr: "French",
+    de: "German",
+  };
+  const lang = languageNames[locale] ?? "English";
   prompt += `
+
+Respond in ${lang}.
 
 Provide your response in this exact format:
 
@@ -133,23 +147,37 @@ Provide your response in this exact format:
 
 export async function POST(req: Request) {
   try {
+    const supabase = await createClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) {
+      return new Response(
+        JSON.stringify({ error: "Sign in to use AI summaries" }),
+        {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+
     const clientIp = getClientIp(req);
     const { allowed, remaining, resetIn } = checkRateLimit(clientIp);
 
     if (!allowed) {
       return new Response(
-        JSON.stringify({ 
+        JSON.stringify({
           error: "Rate limit exceeded. Please try again later.",
-          retryAfter: Math.ceil(resetIn / 1000)
+          retryAfter: Math.ceil(resetIn / 1000),
         }),
         {
           status: 429,
-          headers: { 
+          headers: {
             "Content-Type": "application/json",
             "X-RateLimit-Limit": String(RATE_LIMIT),
             "X-RateLimit-Remaining": "0",
             "X-RateLimit-Reset": String(Math.ceil(resetIn / 1000)),
-            "Retry-After": String(Math.ceil(resetIn / 1000))
+            "Retry-After": String(Math.ceil(resetIn / 1000)),
           },
         }
       );
@@ -162,18 +190,20 @@ export async function POST(req: Request) {
       subjects = [],
       persona = "general",
       country = "general",
+      locale = "en",
     } = body as {
       title: string;
       summary?: string;
       subjects?: string[];
       persona?: Persona;
       country?: Country;
+      locale?: string;
     };
 
     if (!title) {
       return new Response(JSON.stringify({ error: "Title is required" }), {
         status: 400,
-        headers: { 
+        headers: {
           "Content-Type": "application/json",
           "X-RateLimit-Limit": String(RATE_LIMIT),
           "X-RateLimit-Remaining": String(remaining),
@@ -182,7 +212,7 @@ export async function POST(req: Request) {
     }
 
     const systemPrompt = buildSystemPrompt(persona, country);
-    const userPrompt = buildUserPrompt(title, summary || "", subjects);
+    const userPrompt = buildUserPrompt(title, summary || "", subjects, locale);
 
     const result = streamText({
       model: google("gemini-2.0-flash"),
@@ -193,7 +223,7 @@ export async function POST(req: Request) {
     const response = result.toTextStreamResponse();
     response.headers.set("X-RateLimit-Limit", String(RATE_LIMIT));
     response.headers.set("X-RateLimit-Remaining", String(remaining));
-    
+
     return response;
   } catch (error) {
     console.error("Summarize API error:", error);
