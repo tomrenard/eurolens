@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Image from "next/image";
+import { Menu, X } from "lucide-react";
 import { AuthButton } from "@/components/auth-button";
 import { UserProfile } from "@/components/user-profile";
 import { createClient } from "@/lib/supabase/client";
@@ -18,12 +19,12 @@ const NAV_LINKS = [
   { href: "/meps", label: "MEPs" },
 ] as const;
 
-function NavLinks() {
+function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
 
   return (
     <nav
-      className="flex flex-wrap items-center gap-1 sm:gap-2"
+      className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-1 sm:gap-2"
       aria-label="Main navigation"
     >
       {NAV_LINKS.map(({ href, label }) => {
@@ -35,6 +36,7 @@ function NavLinks() {
           <Link
             key={href}
             href={href}
+            onClick={onNavigate}
             className={cn(
               "rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
               isActive
@@ -54,6 +56,12 @@ function NavLinks() {
 export function Navbar() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const pathname = usePathname();
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -89,7 +97,9 @@ export function Navbar() {
           <span className="hidden sm:inline">EuroLens</span>
         </Link>
 
-        <NavLinks />
+        <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-center">
+          <NavLinks />
+        </div>
 
         <div className="flex shrink-0 items-center gap-2">
           {!loading && user && (
@@ -98,8 +108,36 @@ export function Navbar() {
             </div>
           )}
           <AuthButton />
+          <button
+            type="button"
+            onClick={() => setMobileOpen((prev) => !prev)}
+            className="sm:hidden inline-flex items-center justify-center rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            aria-expanded={mobileOpen}
+            aria-controls="mobile-nav"
+            aria-label={mobileOpen ? "Close menu" : "Open menu"}
+          >
+            {mobileOpen ? (
+              <X className="h-5 w-5" />
+            ) : (
+              <Menu className="h-5 w-5" />
+            )}
+          </button>
         </div>
       </div>
+
+      {mobileOpen && (
+        <div
+          id="mobile-nav"
+          className="sm:hidden border-t border-border bg-background px-4 pb-4 pt-2"
+        >
+          <NavLinks onNavigate={() => setMobileOpen(false)} />
+          {!loading && user && (
+            <div className="mt-3 pt-3 border-t border-border">
+              <UserProfile compact />
+            </div>
+          )}
+        </div>
+      )}
     </header>
   );
 }

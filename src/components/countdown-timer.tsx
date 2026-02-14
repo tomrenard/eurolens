@@ -35,7 +35,7 @@ function calculateTimeLeft(targetDate: Date): TimeLeft {
 function TimeUnit({ value, label }: { value: number; label: string }) {
   return (
     <div className="flex flex-col items-center">
-      <div className="w-14 h-14 md:w-18 md:h-18 rounded-xl bg-primary text-primary-foreground flex items-center justify-center shadow-lg">
+      <div className="w-14 h-14 md:w-[4.5rem] md:h-[4.5rem] rounded-xl bg-primary text-primary-foreground flex items-center justify-center shadow-lg">
         <span className="text-2xl md:text-3xl font-bold tabular-nums" suppressHydrationWarning>
           {String(value).padStart(2, "0")}
         </span>
@@ -126,13 +126,13 @@ export function CountdownTimer({ session }: CountdownTimerProps) {
           </p>
 
           {!isSessionStarted && (
-            <div className="flex justify-center items-center gap-2 md:gap-3">
+            <div className="flex flex-wrap justify-center items-center gap-1 sm:gap-2 md:gap-3">
               <TimeUnit value={timeLeft.days} label="Days" />
-              <span className="text-2xl md:text-3xl font-bold text-muted-foreground/30 mt-[-1.5rem]">:</span>
+              <span className="text-xl sm:text-2xl md:text-3xl font-bold text-muted-foreground/30 mt-[-1.5rem]">:</span>
               <TimeUnit value={timeLeft.hours} label="Hours" />
-              <span className="text-2xl md:text-3xl font-bold text-muted-foreground/30 mt-[-1.5rem]">:</span>
+              <span className="text-xl sm:text-2xl md:text-3xl font-bold text-muted-foreground/30 mt-[-1.5rem]">:</span>
               <TimeUnit value={timeLeft.minutes} label="Min" />
-              <span className="text-2xl md:text-3xl font-bold text-muted-foreground/30 mt-[-1.5rem]">:</span>
+              <span className="text-xl sm:text-2xl md:text-3xl font-bold text-muted-foreground/30 mt-[-1.5rem]">:</span>
               <TimeUnit value={timeLeft.seconds} label="Sec" />
             </div>
           )}

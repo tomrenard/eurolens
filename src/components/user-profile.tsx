@@ -144,7 +144,7 @@ export function UserProfile({ compact = false }: UserProfileProps) {
             <p className="text-xs font-medium text-muted-foreground mb-3">
               When you sign in you&apos;ll see:
             </p>
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="text-center">
                 <div className="flex items-center justify-center gap-1 text-purple-500 mb-1">
                   <MessageSquare className="h-4 w-4" />
@@ -220,7 +220,7 @@ export function UserProfile({ compact = false }: UserProfileProps) {
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-3 mt-6 pt-4 border-t border-border">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-4 border-t border-border">
           <div className="text-center">
             <div className="flex items-center justify-center gap-1 text-purple-500 mb-1">
               <MessageSquare className="h-4 w-4" />

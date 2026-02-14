@@ -62,7 +62,7 @@ export function HeroSection() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 lg:w-80">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 lg:w-80">
             <FeatureCard
               icon={<MessageSquare className="h-5 w-5" />}
               title="State Your Position"

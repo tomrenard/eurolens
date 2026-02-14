@@ -9,10 +9,10 @@ export function SessionSectionSkeleton() {
           <Skeleton className="h-8 w-48 mx-auto mb-4 rounded-full" />
           <Skeleton className="h-8 w-64 mx-auto mb-2" />
           <Skeleton className="h-5 w-48 mx-auto mb-6" />
-          <div className="flex justify-center items-center gap-2 md:gap-3">
+          <div className="flex flex-wrap justify-center items-center gap-1 sm:gap-2 md:gap-3">
             {Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="flex flex-col items-center">
-                <Skeleton className="w-14 h-14 md:w-18 md:h-18 rounded-xl" />
+                <Skeleton className="w-14 h-14 md:w-[4.5rem] md:h-[4.5rem] rounded-xl" />
                 <Skeleton className="h-3 w-10 mt-2" />
               </div>
             ))}
