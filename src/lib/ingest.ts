@@ -36,7 +36,12 @@ export interface IngestResult {
   ok: boolean;
   proceduresUpserted: number;
   proceduresEnriched: number;
-  proceduresPendingEnrichment: number;
+  /**
+   * Null when the run failed before it could be measured. It used to report 0
+   * on the error path, which reads exactly like "backlog cleared" — a failed
+   * run and a finished one were indistinguishable from the response alone.
+   */
+  proceduresPendingEnrichment: number | null;
   sessionsUpserted: number;
   error?: string;
   durationMs: number;
@@ -59,7 +64,7 @@ export async function runIngest(): Promise<IngestResult> {
       ok: false,
       proceduresUpserted: 0,
       proceduresEnriched: 0,
-      proceduresPendingEnrichment: 0,
+      proceduresPendingEnrichment: null,
       sessionsUpserted: 0,
       error: "Supabase service role is not configured",
       durationMs: Date.now() - startedAt,
@@ -203,7 +208,7 @@ export async function runIngest(): Promise<IngestResult> {
       ok: false,
       proceduresUpserted: 0,
       proceduresEnriched: 0,
-      proceduresPendingEnrichment: 0,
+      proceduresPendingEnrichment: null,
       sessionsUpserted: 0,
       error: error instanceof Error ? error.message : "Unknown ingest error",
       durationMs: Date.now() - startedAt,
