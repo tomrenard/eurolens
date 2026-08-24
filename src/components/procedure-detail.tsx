@@ -18,6 +18,7 @@ import { RollCallCard } from "@/components/roll-call";
 import { PlainEnglish } from "@/components/plain-english";
 import { formatRelativeDate } from "@/lib/utils";
 import { usePersona } from "@/components/persona-context";
+import { DEFAULT_LOCALE, type ContentLocale } from "@/lib/locale";
 import type { RollCall } from "@/lib/howtheyvote";
 import type { LegislativeProcedure, VotingResult } from "@/types/europarl";
 
@@ -46,6 +47,7 @@ interface ProcedureData {
 
 interface ProcedureDetailProps {
   reference: string;
+  locale?: ContentLocale;
 }
 
 /**
@@ -159,7 +161,10 @@ function VotingResultsCard({ votingResult }: { votingResult: VotingResult }) {
   );
 }
 
-export function ProcedureDetail({ reference }: ProcedureDetailProps) {
+export function ProcedureDetail({
+  reference,
+  locale = DEFAULT_LOCALE,
+}: ProcedureDetailProps) {
   const { persona, country } = usePersona();
   const [procedure, setProcedure] = useState<ProcedureData | null>(null);
   const [rollCall, setRollCall] = useState<RollCall | null>(null);
@@ -170,7 +175,7 @@ export function ProcedureDetail({ reference }: ProcedureDetailProps) {
     async function fetchProcedure() {
       try {
         const response = await fetch(
-          `/api/procedure/${encodeURIComponent(reference)}`
+          `/api/procedure/${encodeURIComponent(reference)}?lang=${locale}`
         );
         if (!response.ok) {
           throw new Error("Failed to fetch procedure");
@@ -185,7 +190,7 @@ export function ProcedureDetail({ reference }: ProcedureDetailProps) {
     }
 
     fetchProcedure();
-  }, [reference]);
+  }, [reference, locale]);
 
   useEffect(() => {
     let cancelled = false;

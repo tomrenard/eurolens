@@ -1,3 +1,5 @@
+import { DEFAULT_LOCALE, type ContentLocale } from "@/lib/locale";
+export { safeDecodeReference, isPlausibleReference } from "@/lib/reference";
 /**
  * Fetches and normalises a single procedure or plenary document from the
  * European Parliament Open Data API.
@@ -46,7 +48,7 @@ interface ApiResponse<T> {
 
 function getLocalizedLabel(
   labels: Record<string, string> | undefined,
-  lang: string = "en"
+  lang: ContentLocale = DEFAULT_LOCALE
 ): string {
   if (!labels) return "";
   return labels[lang] || labels.en || Object.values(labels)[0] || "";
@@ -121,7 +123,10 @@ function getProcedureUrl(reference: string): string {
   )}`;
 }
 
-async function fetchDocumentDetails(reference: string): Promise<{
+async function fetchDocumentDetails(
+  reference: string,
+  locale: ContentLocale = DEFAULT_LOCALE
+): Promise<{
   title: string;
   type: string;
   status: string;
@@ -144,16 +149,22 @@ async function fetchDocumentDetails(reference: string): Promise<{
     const doc = data.data?.[0] || data["@graph"]?.[0];
     if (!doc?.is_realized_by) return null;
 
-    const enExpr = doc.is_realized_by.find((e) => e.language?.includes("/ENG"));
-    let title: string | null = null;
+    // Prefer the requested language, then English, then whatever exists.
+    const localized = doc.is_realized_by
+      .map((expression) => expression.title?.[locale])
+      .find((value): value is string => Boolean(value));
 
-    if (enExpr?.title?.en) {
-      title = enExpr.title.en;
-    } else {
-      const first = doc.is_realized_by[0];
-      title = first?.title ? (Object.values(first.title)[0] as string) : null;
-    }
+    const english = doc.is_realized_by.find((e) =>
+      e.language?.includes("/ENG")
+    )?.title?.en;
 
+    const fallback = doc.is_realized_by
+      .map((expression) =>
+        expression.title ? Object.values(expression.title)[0] : undefined
+      )
+      .find((value): value is string => Boolean(value));
+
+    const title = localized ?? english ?? fallback ?? null;
     if (!title) return null;
 
     return {
@@ -194,7 +205,10 @@ function buildTimelineFromConsistsOf(
   });
 }
 
-async function fetchProcedureDetails(reference: string): Promise<{
+async function fetchProcedureDetails(
+  reference: string,
+  locale: ContentLocale = DEFAULT_LOCALE
+): Promise<{
   title: string;
   summary?: string;
   type: string;
@@ -218,8 +232,8 @@ async function fetchProcedureDetails(reference: string): Promise<{
     const proc = data.data?.[0] || data["@graph"]?.[0];
     if (!proc) return null;
 
-    const title = getLocalizedLabel(proc.process_title) || reference;
-    const summary = getLocalizedLabel(proc.process_summary);
+    const title = getLocalizedLabel(proc.process_title, locale) || reference;
+    const summary = getLocalizedLabel(proc.process_summary, locale);
     const status = getStageLabel(proc.current_stage);
 
     let lastActivity: { date: string; type: string } | undefined;
@@ -257,7 +271,8 @@ export interface ProcedureDetails {
 }
 
 export async function getProcedureByReference(
-  reference: string
+  reference: string,
+  locale: ContentLocale = DEFAULT_LOCALE
 ): Promise<ProcedureDetails> {
   let details: {
     title: string;
@@ -269,13 +284,13 @@ export async function getProcedureByReference(
   } | null = null;
 
   if (isDocumentReference(reference)) {
-    details = await fetchDocumentDetails(reference);
+    details = await fetchDocumentDetails(reference, locale);
   } else if (isProcedureReference(reference)) {
-    details = await fetchProcedureDetails(reference);
+    details = await fetchProcedureDetails(reference, locale);
   } else {
-    details = await fetchDocumentDetails(reference);
+    details = await fetchDocumentDetails(reference, locale);
     if (!details) {
-      details = await fetchProcedureDetails(reference);
+      details = await fetchProcedureDetails(reference, locale);
     }
   }
 

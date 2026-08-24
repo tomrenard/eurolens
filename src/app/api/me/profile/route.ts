@@ -2,29 +2,26 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { UserProfile, UserStats } from "@/types/gamification";
 
-/** Mirrors the profiles_username_charset / _length constraints in the database. */
-const USERNAME_PATTERN = /^[\w \-'\u00C0-\u024F]{1,40}$/u;
+/**
+ * Mirrors profiles_username_charset / _length in the database.
+ *
+ * Uses a Unicode letter/number class rather than `\w`: JavaScript's `\w` is
+ * ASCII-only while Postgres' is locale-aware, so an ASCII pattern rejected
+ * Greek, Cyrillic and CJK names that the database itself accepts — locking
+ * those users out of editing their own name.
+ */
+const USERNAME_PATTERN = /^[\p{L}\p{N} \-'_\u00C0-\u024F]{1,40}$/u;
 
 function rowToProfile(row: {
   id: string;
   username: string;
-  xp: number;
-  level: number;
-  streak: number;
-  last_active_date: string;
   stats: UserStats;
-  achievements: string[];
   created_at: string;
 }): UserProfile {
   return {
     id: row.id,
     username: row.username,
-    xp: row.xp,
-    level: row.level,
-    streak: row.streak,
-    lastActiveDate: row.last_active_date,
     stats: row.stats,
-    achievements: Array.isArray(row.achievements) ? row.achievements : [],
     createdAt: row.created_at,
   };
 }
@@ -46,7 +43,7 @@ export async function GET() {
 
   const { data: row, error } = await supabase
     .from("profiles")
-    .select("*")
+    .select("id, username, stats, created_at")
     .eq("id", user.id)
     .single();
 
@@ -60,11 +57,7 @@ export async function GET() {
     );
   }
 
-  const profile = rowToProfile({
-    ...row,
-    achievements: Array.isArray(row.achievements) ? row.achievements : [],
-  });
-  return NextResponse.json({ profile });
+  return NextResponse.json({ profile: rowToProfile(row) });
 }
 
 export async function PATCH(request: Request) {
@@ -95,8 +88,8 @@ export async function PATCH(request: Request) {
   if (username !== undefined) {
     const trimmed = typeof username === "string" ? username.trim() : "";
 
-    // Usernames appear on the public leaderboard, so they are bounded and
-    // restricted to characters that cannot be used to impersonate markup.
+    // Bounded and restricted to characters that cannot be used to impersonate
+    // markup, since the name is rendered back into the page.
     if (!USERNAME_PATTERN.test(trimmed)) {
       return NextResponse.json(
         {
@@ -114,7 +107,7 @@ export async function PATCH(request: Request) {
     .from("profiles")
     .update(updates)
     .eq("id", user.id)
-    .select()
+    .select("id, username, stats, created_at")
     .single();
 
   if (error) {
@@ -124,9 +117,5 @@ export async function PATCH(request: Request) {
     );
   }
 
-  const profile = rowToProfile({
-    ...row,
-    achievements: Array.isArray(row.achievements) ? row.achievements : [],
-  });
-  return NextResponse.json({ profile });
+  return NextResponse.json({ profile: rowToProfile(row) });
 }

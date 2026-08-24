@@ -14,14 +14,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  savePosition,
-  getPosition,
-  recordAction,
-  checkAchievements,
-} from "@/lib/gamification";
+import { savePosition, getPosition, recordAction } from "@/lib/gamification";
 import { useAuth } from "@/components/auth-context";
-import { XP_REWARDS } from "@/types/gamification";
 import { usePersona } from "@/components/persona-context";
 import type { Position, ActionType, UserPosition } from "@/types/gamification";
 
@@ -78,25 +72,21 @@ const ACTION_CONFIG = {
     label: "Contact MEP",
     icon: Mail,
     color: "purple",
-    xp: XP_REWARDS.CONTACT_MEP,
   },
   consultation: {
     label: "Consultations",
     icon: FileText,
     color: "amber",
-    xp: XP_REWARDS.JOIN_CONSULTATION,
   },
   petition: {
     label: "Petitions",
     icon: FileText,
     color: "blue",
-    xp: XP_REWARDS.SIGN_PETITION,
   },
   share: {
     label: "Share",
     icon: Share2,
     color: "green",
-    xp: XP_REWARDS.SHARE_PROCEDURE,
   },
 } as const;
 
@@ -138,34 +128,39 @@ export function ActionPanel({
    * their positions are imported.
    */
   const persistPosition = useCallback(
-    async (pos: Position) => {
+    async (pos: Position): Promise<boolean> => {
       savePosition(procedureId, procedureTitle, pos);
-      if (!user) return;
+      if (!user) return true;
 
-      await fetch("/api/me/positions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ procedureId, procedureTitle, position: pos }),
-      }).catch(() => {
-        // Local record already saved; a failed sync retries on next action.
-      });
+      try {
+        const response = await fetch("/api/me/positions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ procedureId, procedureTitle, position: pos }),
+        });
+        return response.ok;
+      } catch {
+        return false;
+      }
     },
     [procedureId, procedureTitle, user]
   );
 
   const persistAction = useCallback(
-    async (actionType: ActionType) => {
+    async (actionType: ActionType): Promise<boolean> => {
       recordAction(procedureId, actionType);
-      checkAchievements();
-      if (!user) return;
+      if (!user) return true;
 
-      await fetch("/api/me/actions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ procedureId, action: actionType }),
-      }).catch(() => {
-        // Local record already saved; a failed sync retries on next action.
-      });
+      try {
+        const response = await fetch("/api/me/actions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ procedureId, action: actionType }),
+        });
+        return response.ok;
+      } catch {
+        return false;
+      }
     },
     [procedureId, user]
   );
@@ -184,14 +179,16 @@ export function ActionPanel({
   const actionIconSize = isCompact ? "h-4 w-4" : "h-5 w-5";
   const padding = isCompact ? "p-2.5" : "p-4";
   const textSize = isCompact ? "text-[11px]" : "text-sm";
-  const xpTextSize = isCompact ? "text-[10px]" : "text-xs";
+  const hintTextSize = isCompact ? "text-[10px]" : "text-xs";
 
   const handleAction = async (actionType: ActionType, url?: string) => {
     setLoadingAction(actionType);
 
-    await persistAction(actionType);
+    const saved = await persistAction(actionType);
 
-    setActionFeedback(`+${ACTION_CONFIG[actionType].xp} XP earned!`);
+    setActionFeedback(
+      saved ? `${ACTION_CONFIG[actionType].label} recorded` : "Could not save"
+    );
     setTimeout(() => setActionFeedback(null), 2000);
 
     setLoadingAction(null);
@@ -219,12 +216,12 @@ export function ActionPanel({
           text: shareText,
           url: shareUrl,
         });
-        await persistAction("share");
-        setActionFeedback(`+${XP_REWARDS.SHARE_PROCEDURE} XP earned!`);
+        const saved = await persistAction("share");
+        setActionFeedback(saved ? "Share recorded" : "Could not save");
       } else {
         await navigator.clipboard.writeText(`${shareText}\n${shareUrl}`);
-        await persistAction("share");
-        setActionFeedback(`Link copied! +${XP_REWARDS.SHARE_PROCEDURE} XP`);
+        const saved = await persistAction("share");
+        setActionFeedback(saved ? "Link copied" : "Link copied (not saved)");
       }
     } catch {
       // User cancelled or share failed
@@ -238,10 +235,9 @@ export function ActionPanel({
     setLoadingAction("position");
     setSelectedPosition(pos);
 
-    await persistPosition(pos);
-    checkAchievements();
+    const saved = await persistPosition(pos);
     setShowPositionForm(false);
-    setActionFeedback(`Position saved! +${XP_REWARDS.STATE_POSITION} XP`);
+    setActionFeedback(saved ? "Position saved" : "Could not save position");
 
     setLoadingAction(null);
     setTimeout(() => setActionFeedback(null), 2000);
@@ -366,7 +362,7 @@ export function ActionPanel({
               {!isCompact && " this procedure"}
             </span>
           </span>
-          <span className={`${xpTextSize} opacity-70`}>Change</span>
+          <span className={`${hintTextSize} opacity-70`}>Change</span>
         </Button>
       ) : (
         <Button
@@ -380,9 +376,6 @@ export function ActionPanel({
         >
           <MessageSquare className={isCompact ? "h-3.5 w-3.5" : "h-4 w-4"} />
           <span className="ml-2">State your position</span>
-          <span className={`${xpTextSize} opacity-70 ml-2`}>
-            +{XP_REWARDS.STATE_POSITION} XP
-          </span>
         </Button>
       )}
 
@@ -422,20 +415,14 @@ export function ActionPanel({
                 href={contactMepHref}
                 target="_blank"
                 rel="noopener noreferrer"
-                aria-label={`${config.label} - earn ${config.xp} XP`}
+                aria-label={config.label}
                 onClick={() => {
-                  recordAction(procedureId, "contact_mep");
-                  checkAchievements();
+                  void persistAction("contact_mep");
                 }}
               >
                 <Icon className={actionIconSize} />
                 <span className={`${textSize} font-medium text-foreground`}>
                   {config.label}
-                </span>
-                <span
-                  className={`${xpTextSize} text-muted-foreground group-hover:text-current`}
-                >
-                  +{config.xp} XP
                 </span>
               </Link>
             </Button>
@@ -451,7 +438,7 @@ export function ActionPanel({
               }
               disabled={isLoading}
               className={`flex flex-col items-center gap-1 h-auto ${padding} ${colorClasses} border ${focusClasses} disabled:opacity-50`}
-              aria-label={`${config.label} - earn ${config.xp} XP`}
+              aria-label={config.label}
             >
               {isLoading ? (
                 <Loader2 className={`${actionIconSize} animate-spin`} />
@@ -460,11 +447,6 @@ export function ActionPanel({
               )}
               <span className={`${textSize} font-medium text-foreground`}>
                 {config.label}
-              </span>
-              <span
-                className={`${xpTextSize} text-muted-foreground group-hover:text-current`}
-              >
-                +{config.xp} XP
               </span>
             </Button>
           );

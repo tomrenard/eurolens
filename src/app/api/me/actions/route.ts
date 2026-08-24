@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { deriveProfile, isActionType, parseActions } from "@/lib/scoring";
+import { deriveStats, isActionType, parseActions } from "@/lib/scoring";
 
 /**
  * Records a civic action against a position the user already holds.
@@ -59,9 +59,24 @@ export async function POST(request: NextRequest) {
   const alreadyRecorded = existingActions.includes(action);
 
   if (!alreadyRecorded) {
+    // Read-modify-write on a JSON column: two concurrent requests for
+    // different actions can interleave and lose one. Re-read immediately
+    // before writing and merge, which narrows the window to near zero without
+    // needing a stored procedure. A lost action under-counts rather than
+    // over-counts, so this is the conservative direction to fail in.
+    const { data: fresh } = await supabase
+      .from("positions")
+      .select("actions_taken")
+      .eq("id", position.id)
+      .single();
+
+    const merged = [
+      ...new Set([...parseActions(fresh?.actions_taken), action]),
+    ];
+
     const { error } = await supabase
       .from("positions")
-      .update({ actions_taken: [...existingActions, action] })
+      .update({ actions_taken: merged })
       .eq("id", position.id);
 
     if (error) {
@@ -77,28 +92,14 @@ export async function POST(request: NextRequest) {
     .select("procedure_id, actions_taken")
     .eq("user_id", user.id);
 
-  const { data: existingProfile } = await supabase
-    .from("profiles")
-    .select("xp, stats, streak")
-    .eq("id", user.id)
-    .single();
 
-  const carriedStats = (existingProfile?.stats ?? {}) as {
-    proceduresViewed?: number;
-  };
 
-  const derived = deriveProfile(rows ?? [], {
-    proceduresViewed: carriedStats.proceduresViewed ?? 0,
-    streak: existingProfile?.streak ?? 0,
-  });
+  const stats = deriveStats(rows ?? []);
 
   const { error: updateError } = await supabase
     .from("profiles")
     .update({
-      xp: derived.xp,
-      level: derived.level,
-      stats: derived.stats,
-      achievements: derived.achievements,
+      stats,
       updated_at: new Date().toISOString(),
     })
     .eq("id", user.id);
@@ -110,11 +111,5 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  return NextResponse.json({
-    recorded: !alreadyRecorded,
-    xp: derived.xp,
-    level: derived.level,
-    xpGained: derived.xp - (existingProfile?.xp ?? 0),
-    achievements: derived.achievements,
-  });
+  return NextResponse.json({ recorded: !alreadyRecorded, stats });
 }

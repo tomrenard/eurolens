@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRollCall } from "@/lib/howtheyvote";
+import { safeDecodeReference } from "@/lib/procedure";
 
 /**
  * Individual MEP roll-call votes for a procedure or plenary document.
@@ -13,11 +14,11 @@ export async function GET(
   { params }: { params: Promise<{ reference: string }> }
 ) {
   const { reference } = await params;
-  const decodedReference = decodeURIComponent(reference);
+  const decodedReference = safeDecodeReference(reference);
 
   if (!decodedReference) {
     return NextResponse.json(
-      { error: "Reference is required" },
+      { error: "Reference is malformed" },
       { status: 400 }
     );
   }

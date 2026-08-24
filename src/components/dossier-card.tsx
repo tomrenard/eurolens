@@ -19,7 +19,6 @@ import { formatRelativeDate, isRecentDate } from "@/lib/utils";
 import type {
   LegislativeProcedure,
   Persona,
-  Country,
   VotingResult,
 } from "@/types/europarl";
 
@@ -88,7 +87,6 @@ function VotingBar({ votingResult }: VotingBarProps) {
 interface DossierCardProps {
   procedure: LegislativeProcedure;
   persona?: Persona;
-  country?: Country;
 }
 
 export function DossierCard({
@@ -177,7 +175,9 @@ export function DossierCard({
           )}
           {procedure.status !== "Adopted" && !procedure.votingResult && (
             <ActionPanel
-              procedureId={procedure.id}
+              // Keyed on reference, not id: the detail page uses the reference
+              // too, and keying on both created two position rows for one file.
+              procedureId={procedure.reference}
               procedureTitle={procedure.title}
               procedureReference={procedure.reference}
               variant="compact"

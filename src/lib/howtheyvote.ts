@@ -55,8 +55,8 @@ interface UpstreamMember {
 }
 
 interface UpstreamMemberVote {
-  member: UpstreamMember;
-  position: UpstreamPosition;
+  member?: UpstreamMember;
+  position?: UpstreamPosition | string;
 }
 
 interface UpstreamStatsBucket {
@@ -140,7 +140,7 @@ export interface RollCall {
  * Helpers
  * ------------------------------------------------------------------ */
 
-function toVoteType(position: UpstreamPosition): VoteType {
+function toVoteType(position: string): VoteType | null {
   switch (position) {
     case "FOR":
       return "favor";
@@ -150,6 +150,10 @@ function toVoteType(position: UpstreamPosition): VoteType {
       return "abstention";
     case "DID_NOT_VOTE":
       return "did_not_vote";
+    default:
+      // An unrecognised upstream position is dropped rather than coerced:
+      // returning undefined here silently corrupted the tallies.
+      return null;
   }
 }
 
@@ -217,24 +221,47 @@ async function request<T>(path: string): Promise<T | null> {
  * API
  * ------------------------------------------------------------------ */
 
+/** Compares references ignoring case and separator noise. */
+function referencesMatch(a: string | null | undefined, b: string): boolean {
+  if (!a) return false;
+  const normalise = (value: string) =>
+    value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return normalise(a) === normalise(b);
+}
+
 /**
  * Finds the main roll-call vote for a EuroLens reference. Accepts both
  * document references (`A10-0167/2026`) and procedure references
  * (`2025/2211(INI)`) — upstream search resolves either.
+ *
+ * The upstream endpoint is a fuzzy full-text search, so a result is only
+ * accepted when its own reference matches what was asked for. Without that
+ * check a query like "climate" returned a complete 719-MEP roll call for an
+ * unrelated file, and the app attributed those votes — and that vote's
+ * official summary — to whatever procedure the reader was looking at.
  */
 export async function findVoteByReference(
   reference: string
 ): Promise<UpstreamVoteSummary | null> {
-  if (!reference.trim()) return null;
+  const query = reference.trim();
+  if (!query) return null;
 
   const data = await request<UpstreamSearchResponse>(
-    `/votes?q=${encodeURIComponent(reference)}&limit=10`
+    `/votes?q=${encodeURIComponent(query)}&limit=10`
   );
 
   if (!data?.results?.length) return null;
 
+  const matching = data.results.filter(
+    (vote) =>
+      referencesMatch(vote.reference, query) ||
+      referencesMatch(vote.procedure?.reference, query)
+  );
+
+  if (matching.length === 0) return null;
+
   // Prefer the main vote on the whole text over amendment votes.
-  return data.results.find((vote) => vote.is_main) ?? data.results[0];
+  return matching.find((vote) => vote.is_main) ?? matching[0];
 }
 
 export async function getRollCall(
@@ -248,14 +275,25 @@ export async function getRollCall(
 
   const total = detail.stats?.total ?? {};
 
-  const votes: MEPVote[] = (detail.member_votes ?? []).map((entry) => ({
-    mepId: String(entry.member.id),
-    name: entry.member.full_name,
-    country: entry.member.country?.label ?? "Unknown",
-    countryCode: entry.member.country?.iso_alpha_2 ?? "",
-    politicalGroup: entry.member.group?.short_label ?? "Non-attached",
-    vote: toVoteType(entry.position),
-  }));
+  // Defensive: a malformed member entry must not take down the whole page.
+  // This module promises to fail soft, and the mapping used to sit outside any
+  // guard, so one missing `member` object threw a TypeError out of here.
+  const votes: MEPVote[] = [];
+
+  for (const entry of detail.member_votes ?? []) {
+    const member = entry?.member;
+    const vote = toVoteType(entry?.position ?? "");
+    if (!member || !vote) continue;
+
+    votes.push({
+      mepId: String(member.id),
+      name: member.full_name ?? "Unknown member",
+      country: member.country?.label ?? "Unknown",
+      countryCode: member.country?.iso_alpha_2 ?? "",
+      politicalGroup: member.group?.short_label ?? "Non-attached",
+      vote,
+    });
+  }
 
   return {
     voteId: detail.id,
@@ -277,30 +315,4 @@ export async function getRollCall(
     officialSummary: htmlToParagraphs(detail.snippet?.text),
     sourceUrl: `${ATTRIBUTION.url}/votes/${detail.id}`,
   };
-}
-
-/**
- * How a country's delegation split on a vote. Powers the
- * "how did my MEPs vote" view without a second request.
- */
-export function summariseByCountry(
-  rollCall: RollCall,
-  countryCode: string
-): { votes: MEPVote[]; totals: VotingResult; didNotVote: number } | null {
-  if (!countryCode) return null;
-
-  const votes = rollCall.votes.filter(
-    (vote) => vote.countryCode === countryCode
-  );
-  if (votes.length === 0) return null;
-
-  const totals: VotingResult = { favor: 0, against: 0, abstention: 0 };
-  let didNotVote = 0;
-
-  for (const vote of votes) {
-    if (vote.vote === "did_not_vote") didNotVote++;
-    else totals[vote.vote]++;
-  }
-
-  return { votes, totals, didNotVote };
 }

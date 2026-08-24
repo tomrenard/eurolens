@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { deriveProfile, isActionType } from "@/lib/scoring";
+import { deriveStats, isActionType } from "@/lib/scoring";
 import type { UserPosition } from "@/types/gamification";
 
 const MAX_GUEST_POSITIONS = 200;
+const MAX_TOTAL_POSITIONS = 1000;
 const MAX_REASON_LENGTH = 2000;
 const VALID_POSITIONS = new Set(["support", "oppose", "neutral"]);
 
@@ -47,6 +48,18 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const { count: existingCount } = await supabase
+    .from("positions")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
+
+  // MAX_GUEST_POSITIONS was a per-request slice, so repeated calls with fresh
+  // ids accumulated without limit. Cap the total a user may hold instead.
+  const remainingCapacity = Math.max(
+    0,
+    MAX_TOTAL_POSITIONS - (existingCount ?? 0)
+  );
+
   const importable = guestPositions
     .filter(
       (position) =>
@@ -56,16 +69,25 @@ export async function POST(request: NextRequest) {
         position.procedureTitle.length > 0 &&
         VALID_POSITIONS.has(position?.position)
     )
-    .slice(0, MAX_GUEST_POSITIONS);
+    .slice(0, Math.min(MAX_GUEST_POSITIONS, remainingCapacity));
 
   for (const position of importable) {
     const actions = Array.isArray(position.actionsTaken)
       ? [...new Set(position.actionsTaken.filter(isActionType))]
       : [];
 
-    const timestamp = Number.isNaN(Date.parse(position.timestamp ?? ""))
-      ? new Date().toISOString()
-      : new Date(position.timestamp).toISOString();
+    // Client-supplied timestamps are clamped to the present: an unbounded
+    // value would let a guest backdate or postdate their own history.
+    const parsed = Date.parse(position.timestamp ?? "");
+    const timestamp =
+      Number.isNaN(parsed) || parsed > Date.now()
+        ? new Date().toISOString()
+        : new Date(parsed).toISOString();
+
+    const reason =
+      typeof position.reason === "string"
+        ? position.reason.slice(0, MAX_REASON_LENGTH)
+        : null;
 
     const { error } = await supabase.from("positions").upsert(
       {
@@ -73,7 +95,7 @@ export async function POST(request: NextRequest) {
         procedure_id: position.procedureId,
         procedure_title: position.procedureTitle.slice(0, 500),
         position: position.position,
-        reason: position.reason?.slice(0, MAX_REASON_LENGTH) ?? null,
+        reason,
         actions_taken: actions,
         created_at: timestamp,
       },
@@ -93,26 +115,14 @@ export async function POST(request: NextRequest) {
     .select("procedure_id, actions_taken")
     .eq("user_id", user.id);
 
-  const { data: existing } = await supabase
-    .from("profiles")
-    .select("stats, streak")
-    .eq("id", user.id)
-    .single();
 
-  const carriedStats = (existing?.stats ?? {}) as { proceduresViewed?: number };
 
-  const derived = deriveProfile(rows ?? [], {
-    proceduresViewed: carriedStats.proceduresViewed ?? 0,
-    streak: existing?.streak ?? 0,
-  });
+  const stats = deriveStats(rows ?? []);
 
   const { error: updateError } = await supabase
     .from("profiles")
     .update({
-      xp: derived.xp,
-      level: derived.level,
-      stats: derived.stats,
-      achievements: derived.achievements,
+      stats,
       updated_at: new Date().toISOString(),
     })
     .eq("id", user.id);

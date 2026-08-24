@@ -6,16 +6,21 @@ import { ArrowLeft, FileText } from "lucide-react";
 import { ProcedureDetail } from "@/components/procedure-detail";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getProcedureByReference } from "@/lib/procedure";
+import {
+  getProcedureByReference,
+  isPlausibleReference,
+  safeDecodeReference,
+} from "@/lib/procedure";
 import { explain } from "@/lib/explainer";
 import { siteUrl } from "@/lib/site";
-
-export const revalidate = 3600;
+import { serializeJsonLd } from "@/lib/json-ld";
+import { parseLocale } from "@/lib/locale";
 
 interface ProcedurePageProps {
   params: Promise<{
     reference: string;
   }>;
+  searchParams: Promise<{ lang?: string }>;
 }
 
 function ProcedureDetailSkeleton() {
@@ -33,15 +38,22 @@ function ProcedureDetailSkeleton() {
   );
 }
 
-export default async function ProcedurePage({ params }: ProcedurePageProps) {
-  const { reference } = await params;
-  const decodedReference = decodeURIComponent(reference);
+export default async function ProcedurePage({
+  params,
+  searchParams,
+}: ProcedurePageProps) {
+  const [{ reference }, { lang }] = await Promise.all([params, searchParams]);
+  const locale = parseLocale(lang);
+  const decodedReference = safeDecodeReference(reference);
 
-  if (!decodedReference) {
+  // Reject anything that is not reference-shaped before it reaches the
+  // upstream API or the page's own metadata. A reference we have no record of
+  // still renders — only malformed input is turned away.
+  if (!decodedReference || !isPlausibleReference(decodedReference)) {
     notFound();
   }
 
-  const procedure = await getProcedureByReference(decodedReference);
+  const procedure = await getProcedureByReference(decodedReference, locale);
 
   // schema.org/Legislation gives search engines and civic-data aggregators a
   // machine-readable handle on the file, which plain prose cannot provide.
@@ -62,8 +74,9 @@ export default async function ProcedurePage({ params }: ProcedurePageProps) {
     <main className="min-h-screen p-4 md:p-8 max-w-7xl mx-auto">
       <script
         type="application/ld+json"
-        // Values are our own normalised strings, serialised by JSON.stringify.
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
+        // Escaped rather than plain JSON.stringify: the title can contain
+        // attacker-controlled text on the not-found path. See lib/json-ld.ts.
+        dangerouslySetInnerHTML={{ __html: serializeJsonLd(structuredData) }}
       />
 
       <div className="mb-8">
@@ -93,7 +106,7 @@ export default async function ProcedurePage({ params }: ProcedurePageProps) {
       </div>
 
       <Suspense fallback={<ProcedureDetailSkeleton />}>
-        <ProcedureDetail reference={decodedReference} />
+        <ProcedureDetail reference={decodedReference} locale={locale} />
       </Suspense>
     </main>
   );
@@ -101,10 +114,17 @@ export default async function ProcedurePage({ params }: ProcedurePageProps) {
 
 export async function generateMetadata({
   params,
+  searchParams,
 }: ProcedurePageProps): Promise<Metadata> {
-  const { reference } = await params;
-  const decodedReference = decodeURIComponent(reference);
-  const procedure = await getProcedureByReference(decodedReference);
+  const [{ reference }, { lang }] = await Promise.all([params, searchParams]);
+  const locale = parseLocale(lang);
+  const decodedReference = safeDecodeReference(reference);
+
+  if (!decodedReference || !isPlausibleReference(decodedReference)) {
+    return { title: "Procedure not found | EuroLens" };
+  }
+
+  const procedure = await getProcedureByReference(decodedReference, locale);
   const explanation = explain({
     id: procedure.reference,
     reference: procedure.reference,

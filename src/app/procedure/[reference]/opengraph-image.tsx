@@ -1,5 +1,5 @@
 import { ImageResponse } from "next/og";
-import { getProcedureByReference } from "@/lib/procedure";
+import { getProcedureByReference, safeDecodeReference } from "@/lib/procedure";
 import { explain } from "@/lib/explainer";
 
 export const alt = "EuroLens procedure summary";
@@ -12,27 +12,13 @@ export const contentType = "image/png";
  * Every share of a EuroLens link becomes a small legible summary of the file,
  * which is the cheapest organic reach available to a project with no ad budget.
  */
-/**
- * Route params arrive percent-encoded, and a reference containing `/` reaches
- * this handler double-encoded (`%252F`), so decode until the value is stable.
- */
-function decodeReference(raw: string): string {
-  let value = raw;
-  for (let i = 0; i < 3; i++) {
-    const decoded = decodeURIComponent(value);
-    if (decoded === value) break;
-    value = decoded;
-  }
-  return value;
-}
-
 export default async function Image({
   params,
 }: {
   params: Promise<{ reference: string }>;
 }) {
   const { reference: raw } = await params;
-  const reference = decodeReference(raw);
+  const reference = safeDecodeReference(raw) ?? "";
   const procedure = await getProcedureByReference(reference);
   const explanation = explain({
     id: procedure.reference,

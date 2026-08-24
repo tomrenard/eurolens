@@ -37,8 +37,6 @@ interface ProcedureTypeInfo {
   label: string;
   /** One sentence explaining who has to agree for this to take effect. */
   meaning: string;
-  /** Whether the file can become binding EU law. */
-  binding: boolean;
 }
 
 /**
@@ -50,78 +48,60 @@ export const PROCEDURE_TYPES: Record<string, ProcedureTypeInfo> = {
     label: "Ordinary legislative procedure",
     meaning:
       "Parliament and the Council of the EU are equal co-legislators: both must agree on the same text before it can become law.",
-    binding: true,
   },
   CNS: {
     label: "Consultation",
     meaning:
       "The Council decides. Parliament is asked for an opinion, but the Council is not obliged to follow it.",
-    binding: true,
   },
   APP: {
     label: "Consent",
     meaning:
       "Parliament cannot amend the text, but nothing can take effect without Parliament's approval — an all-or-nothing vote.",
-    binding: true,
   },
   NLE: {
     label: "Non-legislative procedure",
     meaning:
       "Usually an international agreement or an appointment, rather than a new EU law.",
-    binding: true,
   },
   BUD: {
     label: "Budgetary procedure",
     meaning:
       "Parliament and the Council together decide how the EU spends its money for the year.",
-    binding: true,
   },
   DEC: {
     label: "Discharge",
     meaning:
       "Parliament signs off — or refuses to sign off — on how an EU institution spent its budget.",
-    binding: true,
-  },
-  DCE: {
-    label: "Discharge",
-    meaning:
-      "Parliament signs off — or refuses to sign off — on how an EU institution spent its budget.",
-    binding: true,
   },
   INI: {
     label: "Own-initiative report",
     meaning:
       "Parliament setting out its own position to push the Commission to act. It creates political pressure, not law.",
-    binding: false,
   },
   INL: {
     label: "Legislative initiative",
     meaning:
       "Parliament formally asking the Commission to propose a law. The Commission must respond, but is not obliged to comply.",
-    binding: false,
   },
   RSP: {
     label: "Resolution",
     meaning:
       "A political statement of Parliament's position. It carries no legal force on its own.",
-    binding: false,
   },
   IMM: {
     label: "Immunity procedure",
     meaning:
       "Parliament deciding whether to lift or defend the legal immunity of one of its members.",
-    binding: false,
   },
   REG: {
     label: "Rules of Procedure",
     meaning: "Parliament changing its own internal rules.",
-    binding: false,
   },
   SYN: {
     label: "Cooperation procedure",
     meaning:
       "A historical procedure, largely replaced by the ordinary legislative procedure.",
-    binding: true,
   },
 };
 
@@ -132,7 +112,7 @@ const LABEL_TO_CODE: Record<string, string> = {
   Consent: "APP",
   "Non-legislative": "NLE",
   Budget: "BUD",
-  Discharge: "DCE",
+  Discharge: "DEC",
   "Own-initiative": "INI",
   "Legislative Initiative": "INL",
   Resolution: "RSP",
@@ -267,7 +247,7 @@ const TOTAL_SEATS = 720;
 
 export interface VoteReading {
   sentence: string;
-  /** True when the winning side had less than a 10% margin of votes cast. */
+  /** True when the sides were within 10% of each other, abstentions excluded. */
   wasClose: boolean;
   marginPercent: number;
   turnout: number;
@@ -284,17 +264,21 @@ export function readVote(result: VotingResult): VoteReading | null {
   const wasClose = decisive > 0 && marginPercent < 10;
   const passed = favor > against;
 
+  const tied = favor === against;
+
   const parts: string[] = [];
   parts.push(
-    passed
-      ? `Carried by ${favor} votes to ${against}`
-      : `Rejected by ${against} votes to ${favor}`
+    tied
+      ? `Tied, ${favor} votes each`
+      : passed
+        ? `Carried by ${favor} votes to ${against}`
+        : `Rejected by ${against} votes to ${favor}`
   );
   if (abstention > 0) parts.push(`with ${abstention} abstentions`);
 
   let sentence = parts.join(", ") + ".";
 
-  if (wasClose) {
+  if (wasClose && !tied) {
     sentence += ` That is a margin of ${margin} vote${
       margin === 1 ? "" : "s"
     } — a close result.`;

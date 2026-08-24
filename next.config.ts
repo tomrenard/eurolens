@@ -1,18 +1,32 @@
 import type { NextConfig } from "next";
 
+const isDev = process.env.NODE_ENV === "development";
+
 /**
- * EuroLens loads no third-party scripts and no remote images, so the policy
- * can stay tight. `unsafe-inline` on styles is required by Tailwind's runtime
- * style injection; `unsafe-eval` is not granted.
+ * EuroLens loads no third-party scripts and no remote images, so the origin
+ * allowlist is narrow.
+ *
+ * Be clear about the limit, though: `script-src` carries `'unsafe-inline'`
+ * because Next's hydration bootstrap is an inline script, and that also
+ * permits inline event handlers — so this policy restricts *where scripts come
+ * from*, not whether injected markup can run. It is defence in depth behind
+ * output escaping, not a substitute for it. Tightening it further means
+ * emitting a per-request nonce from the proxy and threading it through Next's
+ * script tags.
+ *
+ * React Fast Refresh compiles with `eval`, so development additionally needs
+ * `'unsafe-eval'`; production does not get it.
  */
 const contentSecurityPolicy = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
   // Supabase (auth) and the two open data APIs.
-  "connect-src 'self' https://*.supabase.co https://data.europarl.europa.eu https://howtheyvote.eu",
+  `connect-src 'self' https://*.supabase.co https://data.europarl.europa.eu https://howtheyvote.eu${
+    isDev ? " ws://localhost:* http://localhost:*" : ""
+  }`,
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

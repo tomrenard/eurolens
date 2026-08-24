@@ -11,7 +11,7 @@ EuroLens runs on public data with **no API keys and no per-request cost**. There
 - **Your MEPs** — pick your country and see how your own delegation split on a vote.
 - **Personalised feed** — pick a role and the files touching your interests are ranked first.
 - **Official summaries** — the Legislative Observatory's own summary where one exists.
-- **Multilingual documents** — titles and summaries in seven languages, using the Parliament's own translations.
+- **Multilingual documents** — titles and summaries in seven languages (`?lang=fr`), using the Parliament's own translations rather than a translation service.
 
 ## Data sources
 
@@ -20,13 +20,31 @@ EuroLens runs on public data with **no API keys and no per-request cost**. There
 | [European Parliament Open Data API](https://data.europarl.europa.eu) | Procedures, plenary meetings, decisions | EP reuse policy |
 | [HowTheyVote.eu](https://howtheyvote.eu) | MEP-level roll-call votes | [ODbL](https://opendatacommons.org/licenses/odbl/) |
 
+### The ingest job
+
+With Supabase configured, a daily Vercel Cron job (`vercel.json` → `/api/ingest`)
+mirrors procedures and plenary sessions into Postgres. Reads then hit one
+indexed query instead of fanning out to the EP API, which lifts the catalogue
+well past what a per-request path could fetch and keeps a ~3MB endpoint off the
+request path entirely.
+
+Without it the app falls back to reading the EP API live — still fully
+functional, just a smaller catalogue.
+
+Requires `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET` (see `.env.example`).
+Trigger a backfill by hand with:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://<your-host>/api/ingest
+```
+
 Vote summaries and MEP photographs are excluded from the ODbL and originate from the European Parliament. EuroLens does not mirror MEP photographs.
 
 ## Tech stack
 
 - **Framework**: Next.js 16 (App Router)
 - **Styling**: Tailwind CSS v4 + shadcn/ui
-- **Accounts** (optional): Supabase — sign-in and saved positions only
+- **Accounts** (optional): Supabase — sign-in, saved positions, and the ingest mirror
 
 ## Getting started
 

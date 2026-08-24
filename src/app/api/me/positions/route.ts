@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { UserPosition, Position, ActionType } from "@/types/gamification";
-import { deriveProfile } from "@/lib/scoring";
+import { deriveStats } from "@/lib/scoring";
 
 const MAX_TITLE_LENGTH = 500;
 const MAX_REASON_LENGTH = 2000;
+const MAX_TOTAL_POSITIONS = 1000;
 
 function rowToPosition(row: {
   id: string;
@@ -147,7 +148,22 @@ export async function POST(request: NextRequest) {
         ? updated.actions_taken
         : [],
     });
-    return NextResponse.json({ position: pos, xpGained: 0 });
+    return NextResponse.json({ position: pos });
+  }
+
+  // Bound how many procedures one account may hold a position on. Nothing
+  // verifies that a procedureId corresponds to a real file, so without a cap a
+  // scripted client could insert rows indefinitely.
+  const { count } = await supabase
+    .from("positions")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
+
+  if ((count ?? 0) >= MAX_TOTAL_POSITIONS) {
+    return NextResponse.json(
+      { error: "Position limit reached" },
+      { status: 429 }
+    );
   }
 
   const { data: inserted, error } = await supabase
@@ -172,34 +188,18 @@ export async function POST(request: NextRequest) {
 
   // Recompute the profile from stored rows rather than incrementing a
   // client-supplied total, so XP is always a function of what the server holds.
-  const [{ data: rows }, { data: profileRow }] = await Promise.all([
-    supabase
-      .from("positions")
-      .select("procedure_id, actions_taken")
-      .eq("user_id", user.id),
-    supabase
-      .from("profiles")
-      .select("xp, stats, streak")
-      .eq("id", user.id)
-      .single(),
-  ]);
+  const { data: rows } = await supabase
+    .from("positions")
+    .select("procedure_id, actions_taken")
+    .eq("user_id", user.id);
 
-  const carriedStats = (profileRow?.stats ?? {}) as {
-    proceduresViewed?: number;
-  };
 
-  const derived = deriveProfile(rows ?? [], {
-    proceduresViewed: carriedStats.proceduresViewed ?? 0,
-    streak: profileRow?.streak ?? 0,
-  });
+  const stats = deriveStats(rows ?? []);
 
   await supabase
     .from("profiles")
     .update({
-      xp: derived.xp,
-      level: derived.level,
-      stats: derived.stats,
-      achievements: derived.achievements,
+      stats,
       updated_at: new Date().toISOString(),
     })
     .eq("id", user.id);
@@ -208,11 +208,5 @@ export async function POST(request: NextRequest) {
     ...inserted,
     actions_taken: [],
   });
-  return NextResponse.json({
-    position: pos,
-    xpGained: derived.xp - (profileRow?.xp ?? 0),
-    xp: derived.xp,
-    level: derived.level,
-    achievements: derived.achievements,
-  });
+  return NextResponse.json({ position: pos, stats });
 }

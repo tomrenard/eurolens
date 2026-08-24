@@ -10,7 +10,7 @@ interface CompletedSectionProps {
 }
 
 export function CompletedSection({ procedures }: CompletedSectionProps) {
-  const { persona, country } = usePersona();
+  const { persona } = usePersona();
 
   return (
     <section aria-labelledby="completed-heading">
@@ -33,7 +33,6 @@ export function CompletedSection({ procedures }: CompletedSectionProps) {
       <ProceduresList
         procedures={procedures}
         persona={persona}
-        country={country}
         showFilters={false}
       />
     </section>

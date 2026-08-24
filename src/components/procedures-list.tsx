@@ -8,12 +8,11 @@ import { Button } from "@/components/ui/button";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { scoreRelevance } from "@/lib/explainer";
 import { PERSONA_LABELS } from "@/types/europarl";
-import type { LegislativeProcedure, Persona, Country } from "@/types/europarl";
+import type { LegislativeProcedure, Persona } from "@/types/europarl";
 
 interface ProceduresListProps {
   procedures: LegislativeProcedure[];
   persona: Persona;
-  country: Country;
   showFilters?: boolean;
 }
 
@@ -22,7 +21,6 @@ const ITEMS_PER_PAGE = 6;
 export function ProceduresList({
   procedures,
   persona,
-  country,
   showFilters = true,
 }: ProceduresListProps) {
   const [searchQuery, setSearchQuery] = useState("");
@@ -219,10 +217,9 @@ export function ProceduresList({
           <div className="grid gap-4 sm:gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
             {paginatedProcedures.map((procedure) => (
               <DossierCard
-                key={procedure.id}
+                key={procedure.reference || procedure.id}
                 procedure={procedure}
                 persona={persona}
-                country={country}
               />
             ))}
           </div>
