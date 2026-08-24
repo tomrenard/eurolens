@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { UserProfile, UserStats } from "@/types/gamification";
 
+/** Mirrors the profiles_username_charset / _length constraints in the database. */
+const USERNAME_PATTERN = /^[\w \-'\u00C0-\u024F]{1,40}$/u;
+
 function rowToProfile(row: {
   id: string;
   username: string;
@@ -28,6 +31,10 @@ function rowToProfile(row: {
 
 export async function GET() {
   const supabase = await createClient();
+  if (!supabase) {
+    return NextResponse.json({ profile: null });
+  }
+
   const {
     data: { user },
     error: authError,
@@ -62,6 +69,13 @@ export async function GET() {
 
 export async function PATCH(request: Request) {
   const supabase = await createClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: "Accounts are not enabled on this deployment" },
+      { status: 503 }
+    );
+  }
+
   const {
     data: { user },
     error: authError,
@@ -77,8 +91,23 @@ export async function PATCH(request: Request) {
   const updates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
-  if (typeof username === "string" && username.trim()) {
-    updates.username = username.trim();
+
+  if (username !== undefined) {
+    const trimmed = typeof username === "string" ? username.trim() : "";
+
+    // Usernames appear on the public leaderboard, so they are bounded and
+    // restricted to characters that cannot be used to impersonate markup.
+    if (!USERNAME_PATTERN.test(trimmed)) {
+      return NextResponse.json(
+        {
+          error:
+            "Username must be 1-40 characters and may contain letters, numbers, spaces, hyphens, underscores and apostrophes",
+        },
+        { status: 400 }
+      );
+    }
+
+    updates.username = trimmed;
   }
 
   const { data: row, error } = await supabase

@@ -14,6 +14,10 @@ function totalActionsFromStats(stats: Record<string, number> | null): number {
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
+  if (!supabase) {
+    return NextResponse.json({ entries: [] });
+  }
+
   const { searchParams } = new URL(request.url);
   const limit = Math.min(
     100,
@@ -21,8 +25,11 @@ export async function GET(request: NextRequest) {
   );
   const offset = Math.max(0, Number(searchParams.get("offset")) || 0);
 
+  // Reads the leaderboard_entries view rather than the profiles table: the
+  // view exposes only the columns a public ranking needs, so adding a column
+  // to profiles can never leak it through this endpoint.
   const { data: rows, error } = await supabase
-    .from("profiles")
+    .from("leaderboard_entries")
     .select("id, username, xp, level, stats")
     .order("xp", { ascending: false })
     .range(offset, offset + limit - 1);
