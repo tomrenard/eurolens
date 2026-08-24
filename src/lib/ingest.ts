@@ -1,5 +1,6 @@
 import {
   collectProcedureBasicsForIngest,
+  mapWithConcurrency,
   collectVotedProceduresForIngest,
   collectSessionsForIngest,
   fetchProcedureEnrichment,
@@ -23,10 +24,13 @@ const UPSERT_CHUNK_SIZE = 100;
  * the platform's function timeout (60s on Vercel's Hobby plan). The daily
  * schedule works through the backlog over successive runs.
  */
-const ENRICH_BATCH_SIZE = 120;
+const ENRICH_BATCH_SIZE = 600;
+
+/** Parallel detail requests. Kept modest to stay polite to the EP API. */
+const ENRICH_CONCURRENCY = 8;
 
 /** Stop starting new enrichment work past this point in the run. */
-const ENRICH_TIME_BUDGET_MS = 35_000;
+const ENRICH_TIME_BUDGET_MS = 40_000;
 
 export interface IngestResult {
   ok: boolean;
@@ -146,32 +150,40 @@ export async function runIngest(): Promise<IngestResult> {
       .is("enriched_at", null)
       .limit(ENRICH_BATCH_SIZE);
 
-    let proceduresEnriched = 0;
-
-    for (const row of (pending ?? []) as Array<{
+    // Enrich concurrently: sequentially this managed ~63 rows inside the
+    // budget, which would take a month of daily runs to clear the backlog.
+    const rows = (pending ?? []) as Array<{
       reference: string;
       process_id: string | null;
-    }>) {
-      if (Date.now() - startedAt > ENRICH_TIME_BUDGET_MS) break;
+    }>;
 
-      const enrichment = await fetchProcedureEnrichment(
-        row.reference,
-        row.process_id
-      );
+    const outcomes = await mapWithConcurrency(
+      rows,
+      ENRICH_CONCURRENCY,
+      async (row) => {
+        if (Date.now() - startedAt > ENRICH_TIME_BUDGET_MS) return false;
 
-      // Mark even a failed lookup as attempted, so one permanently
-      // unresolvable reference cannot block the queue every single run.
-      const { error } = await supabase
-        .from("procedures")
-        .update({
-          ...(enrichment ?? {}),
-          enriched_at: now,
-          ingested_at: now,
-        })
-        .eq("reference", row.reference);
+        const enrichment = await fetchProcedureEnrichment(
+          row.reference,
+          row.process_id
+        );
 
-      if (!error && enrichment) proceduresEnriched++;
-    }
+        // Mark even a failed lookup as attempted, so one permanently
+        // unresolvable reference cannot block the queue every single run.
+        const { error } = await supabase
+          .from("procedures")
+          .update({
+            ...(enrichment ?? {}),
+            enriched_at: now,
+            ingested_at: now,
+          })
+          .eq("reference", row.reference);
+
+        return !error && enrichment !== null;
+      }
+    );
+
+    const proceduresEnriched = outcomes.filter(Boolean).length;
 
     const { count: stillPending } = await supabase
       .from("procedures")

@@ -16,7 +16,7 @@ const MAX_CONCURRENT_DETAIL_REQUESTS = 6;
 /**
  * Runs `worker` over `items` with bounded concurrency, preserving input order.
  */
-async function mapWithConcurrency<T, R>(
+export async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
   worker: (item: T, index: number) => Promise<R>
