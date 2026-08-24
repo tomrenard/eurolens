@@ -48,9 +48,9 @@ export function HeroSection() {
                 </a>
               </Button>
               <Button size="lg" variant="outline" className="gap-2" asChild>
-                <Link href="/leaderboard">
+                <Link href="/me">
                   <Trophy className="h-4 w-4" />
-                  View Leaderboard
+                  Your civic record
                 </Link>
               </Button>
               <Button size="lg" variant="ghost" className="gap-2" asChild>

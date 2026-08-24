@@ -1,33 +1,20 @@
 "use client";
 
-import {
-  useState,
-  useEffect,
-  useSyncExternalStore,
-  useRef,
-  useCallback,
-} from "react";
-import { User, Flame, Trophy, MessageSquare, Mail, Share2 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { FileText, Mail, ClipboardList, Share2, PenLine } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AuthButton } from "@/components/auth-button";
-import { XpBar } from "@/components/xp-bar";
-import { LevelBadge } from "@/components/level-badge";
-import {
-  getUserProfile,
-  getLevelTitle,
-  getTotalActions,
-} from "@/lib/gamification";
 import { useAuth } from "@/components/auth-context";
+import { getUserProfile } from "@/lib/gamification";
+import { totalActions } from "@/lib/scoring";
 import type { UserProfile as UserProfileType } from "@/types/gamification";
 
 const STORAGE_KEY = "eurolens-user-profile";
 
 function useLocalProfile(): UserProfileType | null {
-  const cache = useRef<UserProfileType | null>(null);
-
   const subscribe = useCallback((onStoreChange: () => void) => {
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) onStoreChange();
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === STORAGE_KEY) onStoreChange();
     };
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
@@ -35,23 +22,20 @@ function useLocalProfile(): UserProfileType | null {
 
   const getSnapshot = useCallback(() => {
     if (typeof window === "undefined") return null;
-    const profile = getUserProfile();
-    if (
-      !cache.current ||
-      cache.current.xp !== profile.xp ||
-      cache.current.level !== profile.level
-    ) {
-      cache.current = profile;
-    }
-    return cache.current;
+    return localStorage.getItem(STORAGE_KEY);
   }, []);
 
-  const getServerSnapshot = useCallback(() => null, []);
+  const raw = useSyncExternalStore(subscribe, getSnapshot, () => null);
+  if (raw === null) return null;
 
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  try {
+    return getUserProfile();
+  } catch {
+    return null;
+  }
 }
 
-function useUserProfile(): UserProfileType | null {
+function useCivicRecord(): UserProfileType | null {
   const localProfile = useLocalProfile();
   const { user } = useAuth();
   const [fetched, setFetched] = useState<{
@@ -79,170 +63,88 @@ function useUserProfile(): UserProfileType | null {
     };
   }, [user]);
 
-  // The server profile is authoritative once signed in; the local one covers
-  // guests and the moment before the fetch resolves. Matching on user id keeps
-  // a previous account's profile from showing after a switch.
-  const apiProfile = user && fetched?.userId === user.id ? fetched.profile : null;
-
-  return apiProfile ?? localProfile;
+  // Matching on user id keeps a previous account's record from showing after a
+  // switch; the local copy covers guests and the moment before the fetch lands.
+  const remote = user && fetched?.userId === user.id ? fetched.profile : null;
+  return remote ?? localProfile;
 }
+
+const ENTRIES = [
+  { key: "totalPositions", label: "Positions taken", icon: PenLine },
+  { key: "mepsContacted", label: "MEPs contacted", icon: Mail },
+  { key: "consultationsJoined", label: "Consultations", icon: ClipboardList },
+  { key: "petitionsSigned", label: "Petitions", icon: FileText },
+  { key: "proceduresShared", label: "Shared", icon: Share2 },
+] as const;
 
 interface UserProfileProps {
   compact?: boolean;
 }
 
+/**
+ * A private record of what the reader has done.
+ *
+ * This replaced an XP/level/streak display backed by a public leaderboard.
+ * Ranking citizens against each other by political activity reads as partisan
+ * however carefully it is worded, so the numbers are now a personal tally and
+ * are shown only to the person they belong to.
+ */
 export function UserProfile({ compact = false }: UserProfileProps) {
-  const profile = useUserProfile();
+  const profile = useCivicRecord();
   const { user, isLoading } = useAuth();
-  const hasSession = isLoading ? null : Boolean(user);
+
+  if (!profile) return null;
+
+  const actions = totalActions(profile.stats);
 
   if (compact) {
-    if (!profile) return null;
+    if (profile.stats.totalPositions === 0 && actions === 0) return null;
+
     return (
-      <div className="flex items-center gap-3 p-2 rounded-lg bg-gradient-to-r from-primary/5 to-purple-500/5 border border-primary/10">
-        <LevelBadge level={profile.level} size="sm" />
-        <div className="flex-1 min-w-0">
-          <XpBar
-            xp={profile.xp}
-            level={profile.level}
-            showLabel={false}
-            size="sm"
-          />
-        </div>
-        {profile.streak > 0 && (
-          <div className="flex items-center gap-1 text-orange-500">
-            <Flame className="h-4 w-4" />
-            <span className="text-xs font-bold">{profile.streak}</span>
-          </div>
-        )}
+      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+        <span>
+          <span className="font-semibold text-foreground">
+            {profile.stats.totalPositions}
+          </span>{" "}
+          positions
+        </span>
+        <span aria-hidden="true">·</span>
+        <span>
+          <span className="font-semibold text-foreground">{actions}</span>{" "}
+          actions
+        </span>
       </div>
     );
   }
 
-  if (hasSession === false) {
-    return (
-      <Card className="h-full overflow-hidden border border-primary/20 bg-gradient-to-br from-primary/5 via-purple-500/5 to-pink-500/5">
-        <CardContent className="pt-6">
-          <p className="text-sm text-muted-foreground mb-3">
-            Sign in to save your progress and appear on the leaderboard.
-          </p>
-          <AuthButton />
-          <div className="mt-4 pt-4 border-t border-border">
-            <p className="text-xs font-medium text-muted-foreground mb-3">
-              When you sign in you&apos;ll see:
-            </p>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="text-center">
-                <div className="flex items-center justify-center gap-1 text-purple-500 mb-1">
-                  <MessageSquare className="h-4 w-4" />
-                </div>
-                <p className="text-lg font-bold text-foreground">—</p>
-                <p className="text-[10px] text-muted-foreground">Positions</p>
-              </div>
-              <div className="text-center">
-                <div className="flex items-center justify-center gap-1 text-blue-500 mb-1">
-                  <Mail className="h-4 w-4" />
-                </div>
-                <p className="text-lg font-bold text-foreground">—</p>
-                <p className="text-[10px] text-muted-foreground">MEPs</p>
-              </div>
-              <div className="text-center">
-                <div className="flex items-center justify-center gap-1 text-green-500 mb-1">
-                  <Share2 className="h-4 w-4" />
-                </div>
-                <p className="text-lg font-bold text-foreground">—</p>
-                <p className="text-[10px] text-muted-foreground">Actions</p>
-              </div>
-              <div className="text-center">
-                <div className="flex items-center justify-center gap-1 text-amber-500 mb-1">
-                  <Trophy className="h-4 w-4" />
-                </div>
-                <p className="text-lg font-bold text-foreground">—</p>
-                <p className="text-[10px] text-muted-foreground">Badges</p>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (!profile) {
-    return null;
-  }
-
-  const totalActions = getTotalActions(profile);
-
   return (
-    <Card className="h-full overflow-hidden border border-primary/20 bg-gradient-to-br from-primary/5 via-purple-500/5 to-pink-500/5">
-      <CardContent className="pt-6">
-        <div className="flex items-start gap-4">
-          <div className="relative">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center ring-4 ring-primary/20">
-              <User className="h-8 w-8 text-white" />
+    <Card className="h-full">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-lg">Your civic record</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <dl className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {ENTRIES.map(({ key, label, icon: Icon }) => (
+            <div key={key} className="space-y-0.5">
+              <dt className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                {label}
+              </dt>
+              <dd className="text-2xl font-semibold tabular-nums">
+                {profile.stats[key]}
+              </dd>
             </div>
-            <div className="absolute -bottom-1 -right-1">
-              <LevelBadge level={profile.level} size="sm" />
-            </div>
-          </div>
+          ))}
+        </dl>
 
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <h3 className="text-lg font-bold text-foreground truncate">
-                {profile.username}
-              </h3>
-              {profile.streak >= 3 && (
-                <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-600 dark:text-orange-400">
-                  <Flame className="h-3 w-3" />
-                  <span className="text-xs font-bold">
-                    {profile.streak} day streak
-                  </span>
-                </div>
-              )}
-            </div>
-            <p className="text-sm text-muted-foreground mb-3">
-              {getLevelTitle(profile.level)}
+        {!isLoading && !user && (
+          <div className="border-t pt-3 space-y-2">
+            <p className="text-xs text-muted-foreground">
+              This record is stored in this browser only. Sign in to keep it.
             </p>
-            <XpBar xp={profile.xp} level={profile.level} />
+            <AuthButton />
           </div>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-4 border-t border-border">
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-1 text-purple-500 mb-1">
-              <MessageSquare className="h-4 w-4" />
-            </div>
-            <p className="text-lg font-bold text-foreground">
-              {profile.stats.totalPositions}
-            </p>
-            <p className="text-[10px] text-muted-foreground">Positions</p>
-          </div>
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-1 text-blue-500 mb-1">
-              <Mail className="h-4 w-4" />
-            </div>
-            <p className="text-lg font-bold text-foreground">
-              {profile.stats.mepsContacted}
-            </p>
-            <p className="text-[10px] text-muted-foreground">MEPs</p>
-          </div>
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-1 text-green-500 mb-1">
-              <Share2 className="h-4 w-4" />
-            </div>
-            <p className="text-lg font-bold text-foreground">{totalActions}</p>
-            <p className="text-[10px] text-muted-foreground">Actions</p>
-          </div>
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-1 text-amber-500 mb-1">
-              <Trophy className="h-4 w-4" />
-            </div>
-            <p className="text-lg font-bold text-foreground">
-              {profile.achievements.length}
-            </p>
-            <p className="text-[10px] text-muted-foreground">Badges</p>
-          </div>
-        </div>
+        )}
       </CardContent>
     </Card>
   );

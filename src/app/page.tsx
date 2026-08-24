@@ -41,10 +41,10 @@ export default async function Home({ searchParams }: HomeProps) {
             </div>
             <div className="flex flex-col gap-1 shrink-0">
               <Link
-                href="/leaderboard"
+                href="/me"
                 className="flex items-center justify-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors py-2"
               >
-                View your civic action history
+                View your civic record
                 <ChevronRight className="h-3 w-3" />
               </Link>
               <Link
