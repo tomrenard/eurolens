@@ -800,42 +800,6 @@ export async function getUpcomingPlenarySessions(
   }
 }
 
-export interface ProceduresData {
-  inProgress: LegislativeProcedure[];
-  completed: LegislativeProcedure[];
-}
-
-export async function getLegislativeProcedures(
-  locale: ContentLocale = DEFAULT_LOCALE
-): Promise<FetchResult<ProceduresData>> {
-  try {
-    const [proceduresResponse, recentDecisions] = await Promise.all([
-      getProcedures(),
-      getRecentPlenaryDecisions(),
-    ]);
-
-    const basicProcedures =
-      proceduresResponse.data || proceduresResponse["@graph"] || [];
-
-    const procedures =
-      basicProcedures.length > 0
-        ? await enrichProcedures(basicProcedures, locale)
-        : [];
-
-    const inProgress = procedures.filter((p) => p.status !== "Completed");
-    const completed = transformDecisionsLight(recentDecisions);
-
-    return { data: { inProgress, completed }, error: null };
-  } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Failed to fetch legislative procedures";
-    console.error("Failed to fetch legislative procedures:", error);
-    return { data: { inProgress: [], completed: [] }, error: message };
-  }
-}
-
 export async function getInProgressProcedures(
   locale: ContentLocale = DEFAULT_LOCALE
 ): Promise<FetchResult<LegislativeProcedure[]>> {
@@ -885,4 +849,170 @@ export async function getCompletedProcedures(
     console.error("Failed to fetch completed procedures:", error);
     return { data: [], error: message };
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Ingest
+ * ------------------------------------------------------------------ */
+
+/**
+ * A procedure in the shape the local mirror stores it.
+ *
+ * Unlike the read path, this keeps the European Parliament's language maps
+ * intact rather than collapsing them to one locale, so the stored row can
+ * serve any supported language later.
+ */
+export interface IngestProcedure {
+  reference: string;
+  process_id: string | null;
+  titles: Record<string, string>;
+  summaries: Record<string, string>;
+  type: string;
+  status: string;
+  committees: string[];
+  source_url: string | null;
+  last_activity_date: string | null;
+  last_activity_type: string | null;
+  is_completed: boolean;
+  votes_favor: number | null;
+  votes_against: number | null;
+  votes_abstention: number | null;
+  voted_at: string | null;
+}
+
+export interface IngestSession {
+  id: string;
+  title: string;
+  start_date: string;
+  end_date: string;
+}
+
+/**
+ * How many years back to walk when collecting procedures. The read path only
+ * ever looked at the current and previous year because it ran per request;
+ * the ingest job has no such constraint, so the mirror can be deeper than the
+ * live view ever was.
+ */
+const INGEST_YEARS = 3;
+
+function resolveReference(basic: ApiProcedureBasic): string {
+  const fromLabel = extractReferenceFromLabel(basic.label || "");
+  if (fromLabel) return fromLabel;
+
+  const procId = basic.process_id || basic.id.split("/").pop() || "";
+  if (!procId) return "";
+
+  return convertProcedureIdToReference(procId) || procId;
+}
+
+/**
+ * Collects every procedure the EP API will give us for the recent years,
+ * enriched with its detail record.
+ *
+ * Intended for the scheduled ingest job only — it makes far more upstream
+ * requests than any request-time path should.
+ */
+export async function collectProceduresForIngest(): Promise<IngestProcedure[]> {
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: INGEST_YEARS }, (_, i) => currentYear - i);
+
+  const perYear = await mapWithConcurrency(years, 2, (year) =>
+    fetchProceduresByYear(year)
+  );
+
+  const basics = perYear.flat();
+
+  // The same procedure can appear under more than one year bucket.
+  const unique = new Map<string, ApiProcedureBasic>();
+  for (const basic of basics) {
+    const reference = resolveReference(basic);
+    if (reference && !unique.has(reference)) unique.set(reference, basic);
+  }
+
+  const entries = [...unique.entries()];
+
+  const details = await mapWithConcurrency(
+    entries,
+    MAX_CONCURRENT_DETAIL_REQUESTS,
+    ([, basic]) => {
+      const procId = basic.process_id || basic.id.split("/").pop() || "";
+      return getProcedureDetails(procId);
+    }
+  );
+
+  return entries.map(([reference, basic], index) => {
+    const detailed = details[index];
+    const lastActivity = detailed
+      ? getLatestActivity(detailed.consists_of)
+      : undefined;
+    const status = detailed ? getStageLabel(detailed.current_stage) : "Active";
+
+    return {
+      reference,
+      process_id: basic.process_id ?? null,
+      titles: detailed?.process_title ?? { en: basic.label ?? reference },
+      summaries: detailed?.process_summary ?? {},
+      type: getProcedureTypeLabel(basic.process_type),
+      status,
+      committees: detailed ? extractCommittees(detailed.had_participation) : [],
+      source_url: getProcedureUrl(reference),
+      last_activity_date: lastActivity?.date ?? null,
+      last_activity_type: lastActivity?.type ?? null,
+      is_completed: status === "Completed",
+      votes_favor: null,
+      votes_against: null,
+      votes_abstention: null,
+      voted_at: null,
+    };
+  });
+}
+
+/**
+ * Collects recently adopted texts, including their vote counts.
+ *
+ * This is the path that used to pull multi-megabyte responses on every render.
+ * Running it in the job means the cost is paid once per day rather than once
+ * per cache miss.
+ */
+export async function collectVotedProceduresForIngest(): Promise<
+  IngestProcedure[]
+> {
+  const decisions = await loadRecentPlenaryDecisions();
+  const voted = transformDecisionsLight(decisions);
+
+  const titles = await mapWithConcurrency(
+    voted,
+    MAX_CONCURRENT_DETAIL_REQUESTS,
+    (procedure) => fetchFullTitleForReference(procedure.reference)
+  );
+
+  return voted.map((procedure, index) => ({
+    reference: procedure.reference,
+    process_id: null,
+    titles: { en: titles[index] ?? procedure.title },
+    summaries: {},
+    type: procedure.type,
+    status: "Adopted",
+    committees: [],
+    source_url: procedure.sourceUrl ?? null,
+    last_activity_date: procedure.lastActivity?.date ?? null,
+    last_activity_type: procedure.lastActivity?.type ?? null,
+    is_completed: true,
+    votes_favor: procedure.votingResult?.favor ?? null,
+    votes_against: procedure.votingResult?.against ?? null,
+    votes_abstention: procedure.votingResult?.abstention ?? null,
+    voted_at: procedure.lastActivity?.date ?? null,
+  }));
+}
+
+export async function collectSessionsForIngest(): Promise<IngestSession[]> {
+  const response = await getMeetings();
+  const sessions = transformMeetings(response);
+
+  return sessions.map((session) => ({
+    id: session.id,
+    title: session.title,
+    start_date: session.startDate.toISOString(),
+    end_date: session.endDate.toISOString(),
+  }));
 }
