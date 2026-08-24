@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { UserPosition, Position, ActionType } from "@/types/gamification";
-import { getLevel } from "@/lib/gamification";
-import { XP_REWARDS } from "@/types/gamification";
+import { deriveStats } from "@/lib/scoring";
+
+const MAX_TITLE_LENGTH = 500;
+const MAX_REASON_LENGTH = 2000;
+const MAX_TOTAL_POSITIONS = 1000;
 
 function rowToPosition(row: {
   id: string;
@@ -28,6 +31,10 @@ function rowToPosition(row: {
 
 export async function GET() {
   const supabase = await createClient();
+  if (!supabase) {
+    return NextResponse.json({ positions: [] });
+  }
+
   const {
     data: { user },
     error: authError,
@@ -61,6 +68,13 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: "Accounts are not enabled on this deployment" },
+      { status: 503 }
+    );
+  }
+
   const {
     data: { user },
     error: authError,
@@ -89,6 +103,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid position" }, { status: 400 });
   }
 
+  if (procedureTitle.length > MAX_TITLE_LENGTH) {
+    return NextResponse.json({ error: "Title is too long" }, { status: 400 });
+  }
+
+  if (reason !== undefined && reason !== null) {
+    if (typeof reason !== "string" || reason.length > MAX_REASON_LENGTH) {
+      return NextResponse.json(
+        { error: `Reason must be a string of at most ${MAX_REASON_LENGTH} characters` },
+        { status: 400 }
+      );
+    }
+  }
+
   const { data: existing } = await supabase
     .from("positions")
     .select("id, actions_taken")
@@ -103,7 +130,7 @@ export async function POST(request: NextRequest) {
         procedure_title: procedureTitle,
         position,
         reason: reason ?? null,
-        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       })
       .eq("id", existing.id)
       .select()
@@ -121,20 +148,23 @@ export async function POST(request: NextRequest) {
         ? updated.actions_taken
         : [],
     });
-    return NextResponse.json({ position: pos, xpGained: 0 });
+    return NextResponse.json({ position: pos });
   }
 
-  const { data: profileRow } = await supabase
-    .from("profiles")
-    .select("xp, stats")
-    .eq("id", user.id)
-    .single();
+  // Bound how many procedures one account may hold a position on. Nothing
+  // verifies that a procedureId corresponds to a real file, so without a cap a
+  // scripted client could insert rows indefinitely.
+  const { count } = await supabase
+    .from("positions")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
 
-  const currentXp = profileRow?.xp ?? 0;
-  const newXp = currentXp + XP_REWARDS.STATE_POSITION;
-  const level = getLevel(newXp);
-  const stats = (profileRow?.stats as Record<string, number>) ?? {};
-  const totalPositions = (stats.totalPositions ?? 0) + 1;
+  if ((count ?? 0) >= MAX_TOTAL_POSITIONS) {
+    return NextResponse.json(
+      { error: "Position limit reached" },
+      { status: 429 }
+    );
+  }
 
   const { data: inserted, error } = await supabase
     .from("positions")
@@ -156,12 +186,20 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Recompute the profile from stored rows rather than incrementing a
+  // client-supplied total, so XP is always a function of what the server holds.
+  const { data: rows } = await supabase
+    .from("positions")
+    .select("procedure_id, actions_taken")
+    .eq("user_id", user.id);
+
+
+  const stats = deriveStats(rows ?? []);
+
   await supabase
     .from("profiles")
     .update({
-      xp: newXp,
-      level,
-      stats: { ...stats, totalPositions },
+      stats,
       updated_at: new Date().toISOString(),
     })
     .eq("id", user.id);
@@ -170,8 +208,5 @@ export async function POST(request: NextRequest) {
     ...inserted,
     actions_taken: [],
   });
-  return NextResponse.json({
-    position: pos,
-    xpGained: XP_REWARDS.STATE_POSITION,
-  });
+  return NextResponse.json({ position: pos, stats });
 }

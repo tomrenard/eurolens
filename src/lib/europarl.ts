@@ -1,8 +1,42 @@
+import { unstable_cache } from "next/cache";
 import type { PlenarySession, LegislativeProcedure } from "@/types/europarl";
+import { DEFAULT_LOCALE, type ContentLocale } from "@/lib/locale";
 import { apiCache, getCacheKey } from "@/lib/cache";
 
 const BASE_URL = "https://data.europarl.europa.eu/api/v2";
 const CACHE_TTL = 10 * 60 * 1000;
+
+/**
+ * Maximum number of detail requests we will have in flight against the EP API
+ * at once. Without a cap, a page with many procedures fans out one request per
+ * item and a single slow upstream response stalls the whole section.
+ */
+const MAX_CONCURRENT_DETAIL_REQUESTS = 6;
+
+/**
+ * Runs `worker` over `items` with bounded concurrency, preserving input order.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+
+  async function run(): Promise<void> {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await worker(items[index], index);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, run)
+  );
+
+  return results;
+}
 
 interface ApiMeeting {
   id: string;
@@ -63,7 +97,7 @@ interface ApiDecision {
 
 function getLocalizedLabel(
   labels: Record<string, string> | undefined,
-  lang: string = "en"
+  lang: ContentLocale = DEFAULT_LOCALE
 ): string {
   if (!labels) return "";
   return labels[lang] || labels.en || Object.values(labels)[0] || "";
@@ -286,16 +320,16 @@ async function fetchPlenaryMeetings(year: number): Promise<ApiMeeting[]> {
 async function fetchMeetingDecisions(
   meetingId: string
 ): Promise<ApiDecision[]> {
-  const cacheKey = getCacheKey("meeting-decisions", meetingId);
-  const cached = apiCache.get<ApiDecision[]>(cacheKey);
-  if (cached) return cached;
-
   try {
+    // This payload runs to several megabytes, past the Next data cache's 2MB
+    // per-entry limit, so caching the raw response silently fails on every
+    // build. Fetch it uncached and cache the handful of records we keep.
     const res = await fetch(
       `${BASE_URL}/meetings/${meetingId}/decisions?format=application%2Fld%2Bjson`,
       {
         headers: { Accept: "application/ld+json" },
-        next: { revalidate: 300, tags: ["europarl-decisions"] },
+        cache: "no-store",
+        signal: AbortSignal.timeout(20000),
       }
     );
 
@@ -306,23 +340,16 @@ async function fetchMeetingDecisions(
     const data: ApiResponse<ApiDecision> = await res.json();
     const decisions = data.data || data["@graph"] || [];
 
-    const adoptedDecisions = decisions.filter((d) => {
+    return decisions.filter((d) => {
       if (!d.decision_outcome) return (d.number_of_votes_favor || 0) > 0;
       return d.decision_outcome.toUpperCase().includes("ADOPTED");
     });
-
-    apiCache.set(cacheKey, adoptedDecisions, CACHE_TTL);
-    return adoptedDecisions;
   } catch {
     return [];
   }
 }
 
-async function getRecentPlenaryDecisions(): Promise<ApiDecision[]> {
-  const cacheKey = getCacheKey("recent-decisions");
-  const cached = apiCache.get<ApiDecision[]>(cacheKey);
-  if (cached) return cached;
-
+async function loadRecentPlenaryDecisions(): Promise<ApiDecision[]> {
   const currentYear = new Date().getFullYear();
   const previousYear = currentYear - 1;
 
@@ -366,17 +393,25 @@ async function getRecentPlenaryDecisions(): Promise<ApiDecision[]> {
   const decisionsArrays = await Promise.all(decisionsPromises);
   const allDecisions = decisionsArrays.flat();
 
-  const sortedDecisions = allDecisions
+  return allDecisions
     .sort((a, b) => {
       const dateA = a.activity_date ? new Date(a.activity_date).getTime() : 0;
       const dateB = b.activity_date ? new Date(b.activity_date).getTime() : 0;
       return dateB - dateA;
     })
     .slice(0, 20);
-
-  apiCache.set(cacheKey, sortedDecisions, CACHE_TTL);
-  return sortedDecisions;
 }
+
+/**
+ * Caches the reduced decision list — twenty small records — rather than the
+ * multi-megabyte responses it was derived from, so the result survives across
+ * requests and instances instead of living only in per-process memory.
+ */
+const getRecentPlenaryDecisions = unstable_cache(
+  loadRecentPlenaryDecisions,
+  ["recent-plenary-decisions"],
+  { revalidate: 900, tags: ["europarl-decisions"] }
+);
 
 function getProcedureUrl(reference: string): string {
   return `https://oeil.secure.europarl.europa.eu/oeil/en/procedure-file?reference=${encodeURIComponent(
@@ -413,9 +448,10 @@ interface ApiDocumentDetail {
 }
 
 async function fetchPlenaryDocumentTitle(
-  reference: string
+  reference: string,
+  locale: ContentLocale = DEFAULT_LOCALE
 ): Promise<string | null> {
-  const cacheKey = getCacheKey("plenary-doc-title", reference);
+  const cacheKey = getCacheKey("plenary-doc-title", locale, reference);
   const cached = apiCache.get<string>(cacheKey);
   if (cached != null) return cached;
 
@@ -436,14 +472,22 @@ async function fetchPlenaryDocumentTitle(
     const doc = data.data?.[0] || data["@graph"]?.[0];
     if (!doc?.is_realized_by?.length) return null;
 
-    const enExpr = doc.is_realized_by.find((e) => e.language?.includes("/ENG"));
-    let title: string | null = null;
-    if (enExpr?.title?.en) {
-      title = enExpr.title.en;
-    } else {
-      const first = doc.is_realized_by[0];
-      title = first?.title ? (Object.values(first.title)[0] as string) : null;
-    }
+    // Prefer the requested language, then English, then whatever exists.
+    const localized = doc.is_realized_by
+      .map((expression) => expression.title?.[locale])
+      .find((value): value is string => Boolean(value));
+
+    const english = doc.is_realized_by.find((e) =>
+      e.language?.includes("/ENG")
+    )?.title?.en;
+
+    const fallback = doc.is_realized_by
+      .map((expression) =>
+        expression.title ? Object.values(expression.title)[0] : undefined
+      )
+      .find((value): value is string => Boolean(value));
+
+    const title = localized ?? english ?? fallback ?? null;
     if (!title) return null;
 
     apiCache.set(cacheKey, title, CACHE_TTL);
@@ -454,25 +498,28 @@ async function fetchPlenaryDocumentTitle(
 }
 
 async function fetchFullTitleForReference(
-  reference: string
+  reference: string,
+  locale: ContentLocale = DEFAULT_LOCALE
 ): Promise<string | null> {
-  const cacheKey = getCacheKey("procedure-full-title", reference);
+  const cacheKey = getCacheKey("procedure-full-title", locale, reference);
   const cached = apiCache.get<string>(cacheKey);
   if (cached != null) return cached;
 
   let title: string | null = null;
   if (isDocumentReference(reference)) {
-    title = await fetchPlenaryDocumentTitle(reference);
+    title = await fetchPlenaryDocumentTitle(reference, locale);
   } else if (isProcedureReference(reference)) {
     const procId = convertToProcedureId(reference);
     const proc = await getProcedureDetails(procId);
-    title = proc ? getLocalizedLabel(proc.process_title) || null : null;
+    title = proc ? getLocalizedLabel(proc.process_title, locale) || null : null;
   } else {
-    title = await fetchPlenaryDocumentTitle(reference);
+    title = await fetchPlenaryDocumentTitle(reference, locale);
     if (!title) {
       const procId = convertToProcedureId(reference);
       const proc = await getProcedureDetails(procId);
-      title = proc ? getLocalizedLabel(proc.process_title) || null : null;
+      title = proc
+        ? getLocalizedLabel(proc.process_title, locale) || null
+        : null;
     }
   }
 
@@ -604,7 +651,8 @@ export async function getProcedureDetails(
 }
 
 export function transformMeetings(
-  response: ApiResponse<ApiMeeting>
+  response: ApiResponse<ApiMeeting>,
+  locale: ContentLocale = DEFAULT_LOCALE
 ): PlenarySession[] {
   const meetings = response.data || response["@graph"] || [];
 
@@ -619,17 +667,29 @@ export function transformMeetings(
       const type = meeting.had_activity_type || "";
       return type.includes("PLENARY");
     })
-    .map((meeting) => ({
-      id: meeting.activity_id || meeting.id,
-      title: getLocalizedLabel(meeting.activity_label),
-      startDate: new Date(
-        meeting.activity_start_date || meeting.activity_date || Date.now()
-      ),
-      endDate: new Date(
-        meeting.activity_end_date || meeting.activity_date || Date.now()
-      ),
-      type: "Plenary Session",
-    }))
+    .map((meeting): PlenarySession | null => {
+      // A meeting with no usable date is dropped rather than defaulted to now:
+      // defaulting made undated records look like a session happening today.
+      const startRaw = meeting.activity_start_date || meeting.activity_date;
+      if (!startRaw) return null;
+
+      const startDate = new Date(startRaw);
+      if (Number.isNaN(startDate.getTime())) return null;
+
+      const endRaw =
+        meeting.activity_end_date || meeting.activity_date || startRaw;
+      const parsedEnd = new Date(endRaw);
+      const endDate = Number.isNaN(parsedEnd.getTime()) ? startDate : parsedEnd;
+
+      return {
+        id: meeting.activity_id || meeting.id,
+        title: getLocalizedLabel(meeting.activity_label, locale),
+        startDate,
+        endDate,
+        type: "Plenary Session",
+      };
+    })
+    .filter((session): session is PlenarySession => session !== null)
     .sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
 }
 
@@ -658,27 +718,30 @@ function transformProceduresLight(
 }
 
 export async function enrichProcedures(
-  basicProcedures: ApiProcedureBasic[]
+  basicProcedures: ApiProcedureBasic[],
+  locale: ContentLocale = DEFAULT_LOCALE
 ): Promise<LegislativeProcedure[]> {
   const enrichedProcedures: LegislativeProcedure[] = [];
 
-  const detailsPromises = basicProcedures.map((proc) => {
-    const procId = proc.process_id || proc.id.split("/").pop() || "";
-    return getProcedureDetails(procId);
-  });
-
-  const details = await Promise.all(detailsPromises);
+  const details = await mapWithConcurrency(
+    basicProcedures,
+    MAX_CONCURRENT_DETAIL_REQUESTS,
+    (proc) => {
+      const procId = proc.process_id || proc.id.split("/").pop() || "";
+      return getProcedureDetails(procId);
+    }
+  );
 
   for (let i = 0; i < basicProcedures.length; i++) {
     const basic = basicProcedures[i];
     const detailed = details[i];
 
     const title = detailed?.process_title
-      ? getLocalizedLabel(detailed.process_title)
+      ? getLocalizedLabel(detailed.process_title, locale)
       : basic.label || "Untitled Procedure";
 
     const summary = detailed?.process_summary
-      ? getLocalizedLabel(detailed.process_summary)
+      ? getLocalizedLabel(detailed.process_summary, locale)
       : undefined;
 
     const committees = detailed
@@ -718,12 +781,12 @@ export interface FetchResult<T> {
   error: string | null;
 }
 
-export async function getUpcomingPlenarySessions(): Promise<
-  FetchResult<PlenarySession[]>
-> {
+export async function getUpcomingPlenarySessions(
+  locale: ContentLocale = DEFAULT_LOCALE
+): Promise<FetchResult<PlenarySession[]>> {
   try {
     const response = await getMeetings();
-    const sessions = transformMeetings(response);
+    const sessions = transformMeetings(response, locale);
     const now = new Date();
     const upcoming = sessions.filter((session) => session.startDate >= now);
     return { data: upcoming, error: null };
@@ -737,43 +800,9 @@ export async function getUpcomingPlenarySessions(): Promise<
   }
 }
 
-export interface ProceduresData {
-  inProgress: LegislativeProcedure[];
-  completed: LegislativeProcedure[];
-}
-
-export async function getLegislativeProcedures(): Promise<
-  FetchResult<ProceduresData>
-> {
-  try {
-    const [proceduresResponse, recentDecisions] = await Promise.all([
-      getProcedures(),
-      getRecentPlenaryDecisions(),
-    ]);
-
-    const basicProcedures =
-      proceduresResponse.data || proceduresResponse["@graph"] || [];
-
-    const procedures =
-      basicProcedures.length > 0 ? await enrichProcedures(basicProcedures) : [];
-
-    const inProgress = procedures.filter((p) => p.status !== "Completed");
-    const completed = transformDecisionsLight(recentDecisions);
-
-    return { data: { inProgress, completed }, error: null };
-  } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Failed to fetch legislative procedures";
-    console.error("Failed to fetch legislative procedures:", error);
-    return { data: { inProgress: [], completed: [] }, error: message };
-  }
-}
-
-export async function getInProgressProcedures(): Promise<
-  FetchResult<LegislativeProcedure[]>
-> {
+export async function getInProgressProcedures(
+  locale: ContentLocale = DEFAULT_LOCALE
+): Promise<FetchResult<LegislativeProcedure[]>> {
   try {
     const proceduresResponse = await getProcedures();
     const basicProcedures =
@@ -782,7 +811,7 @@ export async function getInProgressProcedures(): Promise<
     const firstPage = basicProcedures.slice(0, 6);
     const rest = basicProcedures.slice(6);
 
-    const enrichedFirstPage = await enrichProcedures(firstPage);
+    const enrichedFirstPage = await enrichProcedures(firstPage, locale);
     const lightRest = transformProceduresLight(rest);
 
     const procedures = [...enrichedFirstPage, ...lightRest];
@@ -797,17 +826,19 @@ export async function getInProgressProcedures(): Promise<
   }
 }
 
-export async function getCompletedProcedures(): Promise<
-  FetchResult<LegislativeProcedure[]>
-> {
+export async function getCompletedProcedures(
+  locale: ContentLocale = DEFAULT_LOCALE
+): Promise<FetchResult<LegislativeProcedure[]>> {
   try {
     const recentDecisions = await getRecentPlenaryDecisions();
     const completed = transformDecisionsLight(recentDecisions);
-    const enriched = await Promise.all(
-      completed.map(async (p) => {
-        const fullTitle = await fetchFullTitleForReference(p.reference);
+    const enriched = await mapWithConcurrency(
+      completed,
+      MAX_CONCURRENT_DETAIL_REQUESTS,
+      async (p) => {
+        const fullTitle = await fetchFullTitleForReference(p.reference, locale);
         return { ...p, title: fullTitle ?? p.title };
-      })
+      }
     );
     return { data: enriched, error: null };
   } catch (error) {
@@ -818,4 +849,170 @@ export async function getCompletedProcedures(): Promise<
     console.error("Failed to fetch completed procedures:", error);
     return { data: [], error: message };
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Ingest
+ * ------------------------------------------------------------------ */
+
+/**
+ * A procedure in the shape the local mirror stores it.
+ *
+ * Unlike the read path, this keeps the European Parliament's language maps
+ * intact rather than collapsing them to one locale, so the stored row can
+ * serve any supported language later.
+ */
+export interface IngestProcedure {
+  reference: string;
+  process_id: string | null;
+  titles: Record<string, string>;
+  summaries: Record<string, string>;
+  type: string;
+  status: string;
+  committees: string[];
+  source_url: string | null;
+  last_activity_date: string | null;
+  last_activity_type: string | null;
+  is_completed: boolean;
+  votes_favor: number | null;
+  votes_against: number | null;
+  votes_abstention: number | null;
+  voted_at: string | null;
+}
+
+export interface IngestSession {
+  id: string;
+  title: string;
+  start_date: string;
+  end_date: string;
+}
+
+/**
+ * How many years back to walk when collecting procedures. The read path only
+ * ever looked at the current and previous year because it ran per request;
+ * the ingest job has no such constraint, so the mirror can be deeper than the
+ * live view ever was.
+ */
+const INGEST_YEARS = 3;
+
+function resolveReference(basic: ApiProcedureBasic): string {
+  const fromLabel = extractReferenceFromLabel(basic.label || "");
+  if (fromLabel) return fromLabel;
+
+  const procId = basic.process_id || basic.id.split("/").pop() || "";
+  if (!procId) return "";
+
+  return convertProcedureIdToReference(procId) || procId;
+}
+
+/**
+ * Collects every procedure the EP API will give us for the recent years,
+ * enriched with its detail record.
+ *
+ * Intended for the scheduled ingest job only — it makes far more upstream
+ * requests than any request-time path should.
+ */
+export async function collectProceduresForIngest(): Promise<IngestProcedure[]> {
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: INGEST_YEARS }, (_, i) => currentYear - i);
+
+  const perYear = await mapWithConcurrency(years, 2, (year) =>
+    fetchProceduresByYear(year)
+  );
+
+  const basics = perYear.flat();
+
+  // The same procedure can appear under more than one year bucket.
+  const unique = new Map<string, ApiProcedureBasic>();
+  for (const basic of basics) {
+    const reference = resolveReference(basic);
+    if (reference && !unique.has(reference)) unique.set(reference, basic);
+  }
+
+  const entries = [...unique.entries()];
+
+  const details = await mapWithConcurrency(
+    entries,
+    MAX_CONCURRENT_DETAIL_REQUESTS,
+    ([, basic]) => {
+      const procId = basic.process_id || basic.id.split("/").pop() || "";
+      return getProcedureDetails(procId);
+    }
+  );
+
+  return entries.map(([reference, basic], index) => {
+    const detailed = details[index];
+    const lastActivity = detailed
+      ? getLatestActivity(detailed.consists_of)
+      : undefined;
+    const status = detailed ? getStageLabel(detailed.current_stage) : "Active";
+
+    return {
+      reference,
+      process_id: basic.process_id ?? null,
+      titles: detailed?.process_title ?? { en: basic.label ?? reference },
+      summaries: detailed?.process_summary ?? {},
+      type: getProcedureTypeLabel(basic.process_type),
+      status,
+      committees: detailed ? extractCommittees(detailed.had_participation) : [],
+      source_url: getProcedureUrl(reference),
+      last_activity_date: lastActivity?.date ?? null,
+      last_activity_type: lastActivity?.type ?? null,
+      is_completed: status === "Completed",
+      votes_favor: null,
+      votes_against: null,
+      votes_abstention: null,
+      voted_at: null,
+    };
+  });
+}
+
+/**
+ * Collects recently adopted texts, including their vote counts.
+ *
+ * This is the path that used to pull multi-megabyte responses on every render.
+ * Running it in the job means the cost is paid once per day rather than once
+ * per cache miss.
+ */
+export async function collectVotedProceduresForIngest(): Promise<
+  IngestProcedure[]
+> {
+  const decisions = await loadRecentPlenaryDecisions();
+  const voted = transformDecisionsLight(decisions);
+
+  const titles = await mapWithConcurrency(
+    voted,
+    MAX_CONCURRENT_DETAIL_REQUESTS,
+    (procedure) => fetchFullTitleForReference(procedure.reference)
+  );
+
+  return voted.map((procedure, index) => ({
+    reference: procedure.reference,
+    process_id: null,
+    titles: { en: titles[index] ?? procedure.title },
+    summaries: {},
+    type: procedure.type,
+    status: "Adopted",
+    committees: [],
+    source_url: procedure.sourceUrl ?? null,
+    last_activity_date: procedure.lastActivity?.date ?? null,
+    last_activity_type: procedure.lastActivity?.type ?? null,
+    is_completed: true,
+    votes_favor: procedure.votingResult?.favor ?? null,
+    votes_against: procedure.votingResult?.against ?? null,
+    votes_abstention: procedure.votingResult?.abstention ?? null,
+    voted_at: procedure.lastActivity?.date ?? null,
+  }));
+}
+
+export async function collectSessionsForIngest(): Promise<IngestSession[]> {
+  const response = await getMeetings();
+  const sessions = transformMeetings(response);
+
+  return sessions.map((session) => ({
+    id: session.id,
+    title: session.title,
+    start_date: session.startDate.toISOString(),
+    end_date: session.endDate.toISOString(),
+  }));
 }

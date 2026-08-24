@@ -10,7 +10,7 @@ interface InProgressSectionProps {
 }
 
 export function InProgressSection({ procedures }: InProgressSectionProps) {
-  const { persona, country } = usePersona();
+  const { persona } = usePersona();
 
   return (
     <section id="procedures" aria-labelledby="in-progress-heading">
@@ -30,7 +30,7 @@ export function InProgressSection({ procedures }: InProgressSectionProps) {
           </p>
         </div>
       </div>
-      <ProceduresList procedures={procedures} persona={persona} country={country} />
+      <ProceduresList procedures={procedures} persona={persona} />
     </section>
   );
 }

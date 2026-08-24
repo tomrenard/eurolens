@@ -3,6 +3,10 @@ import { createClient } from "@/lib/supabase/server";
 
 export async function GET() {
   const supabase = await createClient();
+  if (!supabase) {
+    return NextResponse.json({ alerts: [] });
+  }
+
   const {
     data: { user },
     error: authError,
@@ -38,6 +42,13 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: "Accounts are not enabled on this deployment" },
+      { status: 503 }
+    );
+  }
+
   const {
     data: { user },
     error: authError,
@@ -102,6 +113,13 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   const supabase = await createClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: "Accounts are not enabled on this deployment" },
+      { status: 503 }
+    );
+  }
+
   const {
     data: { user },
     error: authError,

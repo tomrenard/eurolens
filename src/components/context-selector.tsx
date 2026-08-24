@@ -1,5 +1,7 @@
 "use client";
 
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useTransition } from "react";
 import {
   Select,
   SelectContent,
@@ -7,25 +9,40 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { usePersona, type SummaryLocale } from "@/components/persona-context";
+import { usePersona } from "@/components/persona-context";
+import {
+  CONTENT_LOCALES,
+  LOCALE_LABELS,
+  parseLocale,
+  type ContentLocale,
+} from "@/lib/locale";
 import type { Persona, Country } from "@/types/europarl";
 import { PERSONA_LABELS, COUNTRY_LABELS } from "@/types/europarl";
 
-const LOCALE_LABELS: Record<SummaryLocale, string> = {
-  en: "English",
-  fr: "Français",
-  de: "Deutsch",
-};
-
 export function ContextSelector() {
-  const {
-    persona,
-    country,
-    summaryLocale,
-    setPersona,
-    setCountry,
-    setSummaryLocale,
-  } = usePersona();
+  const { persona, country, setPersona, setCountry } = usePersona();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [isPending, startTransition] = useTransition();
+
+  const locale = parseLocale(searchParams.get("lang"));
+
+  /**
+   * Language is a server concern: it selects which of the European
+   * Parliament's own translations we read, so it travels in the URL and
+   * triggers a server re-render rather than living in client state.
+   */
+  const handleLocaleChange = (value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value === "en") params.delete("lang");
+    else params.set("lang", value);
+
+    const query = params.toString();
+    startTransition(() => {
+      router.push(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    });
+  };
 
   return (
     <div className="flex flex-col sm:flex-row gap-4 p-4 bg-card rounded-lg border">
@@ -80,17 +97,18 @@ export function ContextSelector() {
           htmlFor="locale-select"
           className="block text-sm font-medium text-muted-foreground mb-2"
         >
-          Summary language
+          Document language
         </label>
-        <Select
-          value={summaryLocale}
-          onValueChange={(value) => setSummaryLocale(value as SummaryLocale)}
-        >
-          <SelectTrigger id="locale-select" className="w-full">
+        <Select value={locale} onValueChange={handleLocaleChange}>
+          <SelectTrigger
+            id="locale-select"
+            className="w-full"
+            aria-busy={isPending}
+          >
             <SelectValue placeholder="Language" />
           </SelectTrigger>
           <SelectContent>
-            {(Object.keys(LOCALE_LABELS) as SummaryLocale[]).map((key) => (
+            {CONTENT_LOCALES.map((key: ContentLocale) => (
               <SelectItem key={key} value={key}>
                 {LOCALE_LABELS[key]}
               </SelectItem>
@@ -98,15 +116,17 @@ export function ContextSelector() {
           </SelectContent>
         </Select>
       </div>
-      {(persona !== "general" ||
-        country !== "general" ||
-        summaryLocale !== "en") && (
-        <div className="flex items-end">
-          <p className="text-sm text-muted-foreground italic">
-            AI summaries will be tailored to your context
-          </p>
-        </div>
-      )}
+      <div className="flex items-end">
+        <p className="text-sm text-muted-foreground">
+          {persona === "general"
+            ? "Pick a role to surface the files that affect you first."
+            : `Showing ${PERSONA_LABELS[
+                persona
+              ].toLowerCase()} matches first. Titles and summaries come from the Parliament in ${
+                LOCALE_LABELS[locale]
+              }.`}
+        </p>
+      </div>
     </div>
   );
 }

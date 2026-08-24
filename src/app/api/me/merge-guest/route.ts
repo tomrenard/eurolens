@@ -1,14 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getLevel } from "@/lib/gamification";
-import type {
-  UserProfile,
-  UserPosition,
-  UserStats,
-} from "@/types/gamification";
+import { deriveStats, isActionType } from "@/lib/scoring";
+import type { UserPosition } from "@/types/gamification";
 
+const MAX_GUEST_POSITIONS = 200;
+const MAX_TOTAL_POSITIONS = 1000;
+const MAX_REASON_LENGTH = 2000;
+const VALID_POSITIONS = new Set(["support", "oppose", "neutral"]);
+
+/**
+ * Promotes a guest's locally stored positions into their account on first
+ * sign-in.
+ *
+ * Only the positions themselves are imported. XP, level, stats and
+ * achievements are recomputed from the resulting rows, never taken from the
+ * request: the previous version merged client-supplied XP with `Math.max`,
+ * which let anyone edit localStorage and post an arbitrary score to the
+ * public leaderboard.
+ */
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: "Accounts are not enabled on this deployment" },
+      { status: 503 }
+    );
+  }
+
   const {
     data: { user },
     error: authError,
@@ -19,91 +37,92 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({}));
-  const { profile: guestProfile, positions: guestPositions } = body as {
-    profile?: UserProfile;
+  const { positions: guestPositions } = body as {
     positions?: UserPosition[];
   };
 
-  if (!guestProfile || !Array.isArray(guestPositions)) {
+  if (!Array.isArray(guestPositions)) {
     return NextResponse.json(
-      { error: "profile and positions are required" },
+      { error: "positions is required" },
       { status: 400 }
     );
   }
 
-  const { data: existing } = await supabase
-    .from("profiles")
-    .select("xp, level, streak, last_active_date, stats, achievements")
-    .eq("id", user.id)
-    .single();
+  const { count: existingCount } = await supabase
+    .from("positions")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
 
-  const guestXp = guestProfile.xp ?? 0;
-  const guestStats = guestProfile.stats ?? ({} as UserStats);
-  const guestAchievements = Array.isArray(guestProfile.achievements)
-    ? guestProfile.achievements
-    : [];
-
-  const serverXp = existing?.xp ?? 0;
-  const serverStats = (existing?.stats as UserStats) ?? ({} as UserStats);
-  const serverAchievements = Array.isArray(existing?.achievements)
-    ? existing.achievements
-    : [];
-
-  const mergedXp = Math.max(serverXp, guestXp);
-  const mergedLevel = getLevel(mergedXp);
-  const mergedStats: UserStats = {
-    totalPositions: Math.max(
-      serverStats.totalPositions ?? 0,
-      guestStats.totalPositions ?? 0
-    ),
-    mepsContacted: Math.max(
-      serverStats.mepsContacted ?? 0,
-      guestStats.mepsContacted ?? 0
-    ),
-    consultationsJoined: Math.max(
-      serverStats.consultationsJoined ?? 0,
-      guestStats.consultationsJoined ?? 0
-    ),
-    petitionsSigned: Math.max(
-      serverStats.petitionsSigned ?? 0,
-      guestStats.petitionsSigned ?? 0
-    ),
-    proceduresShared: Math.max(
-      serverStats.proceduresShared ?? 0,
-      guestStats.proceduresShared ?? 0
-    ),
-    proceduresViewed: Math.max(
-      serverStats.proceduresViewed ?? 0,
-      guestStats.proceduresViewed ?? 0
-    ),
-    summariesGenerated: Math.max(
-      serverStats.summariesGenerated ?? 0,
-      guestStats.summariesGenerated ?? 0
-    ),
-  };
-  const mergedAchievements = [
-    ...new Set([...serverAchievements, ...guestAchievements]),
-  ];
-  const mergedStreak = Math.max(
-    existing?.streak ?? 0,
-    guestProfile.streak ?? 0
+  // MAX_GUEST_POSITIONS was a per-request slice, so repeated calls with fresh
+  // ids accumulated without limit. Cap the total a user may hold instead.
+  const remainingCapacity = Math.max(
+    0,
+    MAX_TOTAL_POSITIONS - (existingCount ?? 0)
   );
-  const mergedLastActive =
-    existing?.last_active_date && guestProfile.lastActiveDate
-      ? [existing.last_active_date, guestProfile.lastActiveDate].sort()[1]
-      : existing?.last_active_date ??
-        guestProfile.lastActiveDate ??
-        new Date().toISOString().split("T")[0];
+
+  const importable = guestPositions
+    .filter(
+      (position) =>
+        typeof position?.procedureId === "string" &&
+        position.procedureId.length > 0 &&
+        typeof position?.procedureTitle === "string" &&
+        position.procedureTitle.length > 0 &&
+        VALID_POSITIONS.has(position?.position)
+    )
+    .slice(0, Math.min(MAX_GUEST_POSITIONS, remainingCapacity));
+
+  for (const position of importable) {
+    const actions = Array.isArray(position.actionsTaken)
+      ? [...new Set(position.actionsTaken.filter(isActionType))]
+      : [];
+
+    // Client-supplied timestamps are clamped to the present: an unbounded
+    // value would let a guest backdate or postdate their own history.
+    const parsed = Date.parse(position.timestamp ?? "");
+    const timestamp =
+      Number.isNaN(parsed) || parsed > Date.now()
+        ? new Date().toISOString()
+        : new Date(parsed).toISOString();
+
+    const reason =
+      typeof position.reason === "string"
+        ? position.reason.slice(0, MAX_REASON_LENGTH)
+        : null;
+
+    const { error } = await supabase.from("positions").upsert(
+      {
+        user_id: user.id,
+        procedure_id: position.procedureId,
+        procedure_title: position.procedureTitle.slice(0, 500),
+        position: position.position,
+        reason,
+        actions_taken: actions,
+        created_at: timestamp,
+      },
+      { onConflict: "user_id,procedure_id" }
+    );
+
+    if (error) {
+      return NextResponse.json(
+        { error: "Failed to import positions" },
+        { status: 500 }
+      );
+    }
+  }
+
+  const { data: rows } = await supabase
+    .from("positions")
+    .select("procedure_id, actions_taken")
+    .eq("user_id", user.id);
+
+
+
+  const stats = deriveStats(rows ?? []);
 
   const { error: updateError } = await supabase
     .from("profiles")
     .update({
-      xp: mergedXp,
-      level: mergedLevel,
-      streak: mergedStreak,
-      last_active_date: mergedLastActive,
-      stats: mergedStats,
-      achievements: mergedAchievements,
+      stats,
       updated_at: new Date().toISOString(),
     })
     .eq("id", user.id);
@@ -115,21 +134,5 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  for (const pos of guestPositions) {
-    if (!pos.procedureId || !pos.procedureTitle || !pos.position) continue;
-    await supabase.from("positions").upsert(
-      {
-        user_id: user.id,
-        procedure_id: pos.procedureId,
-        procedure_title: pos.procedureTitle,
-        position: pos.position,
-        reason: pos.reason ?? null,
-        actions_taken: Array.isArray(pos.actionsTaken) ? pos.actionsTaken : [],
-        created_at: pos.timestamp ?? new Date().toISOString(),
-      },
-      { onConflict: "user_id,procedure_id" }
-    );
-  }
-
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, imported: importable.length });
 }

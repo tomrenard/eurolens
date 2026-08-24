@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { PersonaProvider } from "@/components/persona-context";
+import { AuthProvider } from "@/components/auth-context";
 import { Navbar } from "@/components/navbar";
+import { siteUrl } from "@/lib/site";
 import "./globals.css";
 
 const inter = Inter({
@@ -11,6 +13,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl()),
   title: "EuroLens - Your Voice in Brussels",
   description:
     "Understand EU legislation, take a stance, and make your voice heard. Contact MEPs, join consultations, and earn XP for civic engagement.",
@@ -54,10 +57,12 @@ export default function RootLayout({
         <meta name="theme-color" content="#003399" />
       </head>
       <body className={`${inter.variable} font-sans antialiased`}>
-        <PersonaProvider>
-          <Navbar />
-          {children}
-        </PersonaProvider>
+        <AuthProvider>
+          <PersonaProvider>
+            <Navbar />
+            {children}
+          </PersonaProvider>
+        </AuthProvider>
       </body>
     </html>
   );

@@ -1,9 +1,19 @@
 import { getUpcomingPlenarySessions } from "@/lib/europarl";
+import { DEFAULT_LOCALE, type ContentLocale } from "@/lib/locale";
+import { getStoredUpcomingSessions } from "@/lib/store";
 import { CountdownTimer } from "@/components/countdown-timer";
 import { Card, CardContent } from "@/components/ui/card";
 
-export async function SessionSection() {
-  const { data: sessions, error } = await getUpcomingPlenarySessions();
+export async function SessionSection({
+  locale = DEFAULT_LOCALE,
+}: {
+  locale?: ContentLocale;
+}) {
+  const stored = await getStoredUpcomingSessions();
+
+  const { data: sessions, error } = stored
+    ? { data: stored, error: null }
+    : await getUpcomingPlenarySessions(locale);
 
   if (error) {
     return (

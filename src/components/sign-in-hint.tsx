@@ -1,34 +1,20 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/components/auth-context";
 
-interface SignInHintProps {
-  variant?: "home" | "leaderboard";
-}
+/**
+ * Nudges guests to sign in so their civic record survives a browser change.
+ * There is no ranking to join — the record is private.
+ */
+export function SignInHint() {
+  const { user, isLoading } = useAuth();
 
-export function SignInHint({ variant = "home" }: SignInHintProps) {
-  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  if (isLoading || user) return null;
 
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSignedIn(!!session?.user);
-    });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSignedIn(!!session?.user);
-    });
-    return () => subscription.unsubscribe();
-  }, []);
-
-  if (signedIn !== false) return null;
-
-  const text =
-    variant === "leaderboard"
-      ? "Sign in to save your progress and rank on the leaderboard."
-      : "Sign in to save your progress and appear on the leaderboard.";
-
-  return <p className="text-xs text-muted-foreground">{text}</p>;
+  return (
+    <p className="text-xs text-muted-foreground">
+      Your record is stored in this browser only. Sign in to keep it across
+      devices.
+    </p>
+  );
 }
