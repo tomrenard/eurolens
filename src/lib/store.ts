@@ -155,17 +155,39 @@ export async function getStoredUpcomingSessions(): Promise<
   }));
 }
 
-/** Every reference in the mirror, for the sitemap. */
+/** PostgREST caps a response at 1000 rows regardless of `.limit()`. */
+const PAGE_SIZE = 1000;
+
+/** Hard ceiling, well under the 50,000-URL sitemap limit. */
+const MAX_SITEMAP_REFERENCES = 45000;
+
+/**
+ * Every reference in the mirror, for the sitemap.
+ *
+ * Pages explicitly: a single `.limit(5000)` silently returned only the first
+ * 1000 rows, so the sitemap listed 1000 procedures out of 2164 and the rest
+ * were never offered to search engines.
+ */
 export async function getStoredReferences(): Promise<string[] | null> {
   const supabase = await createClient();
   if (!supabase) return null;
 
-  const { data, error } = await supabase
-    .from("procedures")
-    .select("reference")
-    .limit(5000);
+  const references: string[] = [];
 
-  if (error || !data?.length) return null;
+  for (let offset = 0; offset < MAX_SITEMAP_REFERENCES; offset += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("procedures")
+      .select("reference")
+      .order("reference", { ascending: true })
+      .range(offset, offset + PAGE_SIZE - 1);
 
-  return (data as { reference: string }[]).map((row) => row.reference);
+    if (error) break;
+    if (!data?.length) break;
+
+    references.push(...(data as { reference: string }[]).map((r) => r.reference));
+
+    if (data.length < PAGE_SIZE) break;
+  }
+
+  return references.length > 0 ? references : null;
 }
