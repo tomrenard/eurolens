@@ -6,6 +6,8 @@ import { DossierCard } from "@/components/dossier-card";
 import { ProcedureFilters } from "@/components/procedure-filters";
 import { Button } from "@/components/ui/button";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { scoreRelevance } from "@/lib/explainer";
+import { PERSONA_LABELS } from "@/types/europarl";
 import type { LegislativeProcedure, Persona, Country } from "@/types/europarl";
 
 interface ProceduresListProps {
@@ -27,6 +29,7 @@ export function ProceduresList({
   const [typeFilter, setTypeFilter] = useState("all");
   const [yearFilter, setYearFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(0);
+  const [relevantFirst, setRelevantFirst] = useState(true);
 
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
 
@@ -72,12 +75,44 @@ export function ProceduresList({
     });
   }, [procedures, debouncedSearch, typeFilter, yearFilter]);
 
-  const totalPages = Math.ceil(filteredProcedures.length / ITEMS_PER_PAGE);
+  /**
+   * Personalisation used to mean asking a model to reword a summary for the
+   * reader. It now ranks the feed instead: files whose committee or subject
+   * matter matches the selected persona surface first, which is both free and
+   * a better answer to "what here affects me".
+   */
+  const rankedProcedures = useMemo(() => {
+    if (persona === "general" || !relevantFirst) return filteredProcedures;
+
+    return [...filteredProcedures]
+      .map((procedure) => ({
+        procedure,
+        score: scoreRelevance(
+          { committees: procedure.subjects, title: procedure.title },
+          persona
+        ),
+      }))
+      .sort((a, b) => b.score - a.score)
+      .map((entry) => entry.procedure);
+  }, [filteredProcedures, persona, relevantFirst]);
+
+  const relevantCount = useMemo(() => {
+    if (persona === "general") return 0;
+    return filteredProcedures.filter(
+      (procedure) =>
+        scoreRelevance(
+          { committees: procedure.subjects, title: procedure.title },
+          persona
+        ) > 0
+    ).length;
+  }, [filteredProcedures, persona]);
+
+  const totalPages = Math.ceil(rankedProcedures.length / ITEMS_PER_PAGE);
 
   const paginatedProcedures = useMemo(() => {
     const start = currentPage * ITEMS_PER_PAGE;
-    return filteredProcedures.slice(start, start + ITEMS_PER_PAGE);
-  }, [filteredProcedures, currentPage]);
+    return rankedProcedures.slice(start, start + ITEMS_PER_PAGE);
+  }, [rankedProcedures, currentPage]);
 
   const handleTypeChange = (type: string) => {
     setTypeFilter(type);
@@ -144,6 +179,27 @@ export function ProceduresList({
         </div>
       )}
 
+      {persona !== "general" && relevantCount > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
+          <p className="text-sm text-foreground">
+            <span className="font-semibold">{relevantCount}</span> of{" "}
+            {filteredProcedures.length} match{" "}
+            {PERSONA_LABELS[persona].toLowerCase()} interests.
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setRelevantFirst((prev) => !prev);
+              setCurrentPage(0);
+            }}
+            aria-pressed={relevantFirst}
+          >
+            {relevantFirst ? "Show in original order" : "Show relevant first"}
+          </Button>
+        </div>
+      )}
+
       {filteredProcedures.length === 0 ? (
         <div className="text-center py-12">
           <p className="text-muted-foreground">
@@ -198,7 +254,7 @@ export function ProceduresList({
           )}
 
           <p className="text-center text-sm text-muted-foreground">
-            Showing {paginatedProcedures.length} of {filteredProcedures.length}{" "}
+            Showing {paginatedProcedures.length} of {rankedProcedures.length}{" "}
             procedures
           </p>
         </>

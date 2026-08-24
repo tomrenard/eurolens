@@ -1,9 +1,14 @@
 import { getInProgressProcedures } from "@/lib/europarl";
+import { DEFAULT_LOCALE, type ContentLocale } from "@/lib/locale";
 import { InProgressSection } from "./in-progress-section";
 import { Card, CardContent } from "@/components/ui/card";
 
-export async function InProgressData() {
-  const { data: procedures, error } = await getInProgressProcedures();
+export async function InProgressData({
+  locale = DEFAULT_LOCALE,
+}: {
+  locale?: ContentLocale;
+}) {
+  const { data: procedures, error } = await getInProgressProcedures(locale);
 
   if (error) {
     return (

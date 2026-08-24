@@ -1,9 +1,14 @@
 import { getCompletedProcedures } from "@/lib/europarl";
+import { DEFAULT_LOCALE, type ContentLocale } from "@/lib/locale";
 import { CompletedSection } from "./completed-section";
 import { Card, CardContent } from "@/components/ui/card";
 
-export async function CompletedData() {
-  const { data: procedures, error } = await getCompletedProcedures();
+export async function CompletedData({
+  locale = DEFAULT_LOCALE,
+}: {
+  locale?: ContentLocale;
+}) {
+  const { data: procedures, error } = await getCompletedProcedures(locale);
 
   if (error) {
     return (
