@@ -1,29 +1,15 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/components/auth-context";
 
 interface SignInHintProps {
   variant?: "home" | "leaderboard";
 }
 
 export function SignInHint({ variant = "home" }: SignInHintProps) {
-  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  const { user, isLoading } = useAuth();
 
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSignedIn(!!session?.user);
-    });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSignedIn(!!session?.user);
-    });
-    return () => subscription.unsubscribe();
-  }, []);
-
-  if (signedIn !== false) return null;
+  if (isLoading || user) return null;
 
   const text =
     variant === "leaderboard"

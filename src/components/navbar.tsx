@@ -1,14 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Image from "next/image";
 import { Menu, X } from "lucide-react";
 import { AuthButton } from "@/components/auth-button";
 import { UserProfile } from "@/components/user-profile";
-import { createClient } from "@/lib/supabase/client";
-import type { User } from "@supabase/supabase-js";
+import { useAuth } from "@/components/auth-context";
 import { cn } from "@/lib/utils";
 
 const NAV_LINKS = [
@@ -54,28 +53,18 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 export function Navbar() {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { user, isLoading: loading } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
+  const [openedOnPath, setOpenedOnPath] = useState(pathname);
 
-  useEffect(() => {
+  // Derive the closed state from navigation instead of resetting it in an
+  // effect, which caused a second render pass on every route change.
+  if (openedOnPath !== pathname) {
+    setOpenedOnPath(pathname);
     setMobileOpen(false);
-  }, [pathname]);
+  }
 
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-    return () => subscription.unsubscribe();
-  }, []);
 
   return (
     <header

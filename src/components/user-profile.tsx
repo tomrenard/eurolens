@@ -17,7 +17,7 @@ import {
   getLevelTitle,
   getTotalActions,
 } from "@/lib/gamification";
-import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/components/auth-context";
 import type { UserProfile as UserProfileType } from "@/types/gamification";
 
 const STORAGE_KEY = "eurolens-user-profile";
@@ -53,39 +53,38 @@ function useLocalProfile(): UserProfileType | null {
 
 function useUserProfile(): UserProfileType | null {
   const localProfile = useLocalProfile();
-  const [apiProfile, setApiProfile] = useState<
-    UserProfileType | null | undefined
-  >(undefined);
+  const { user } = useAuth();
+  const [fetched, setFetched] = useState<{
+    userId: string;
+    profile: UserProfileType | null;
+  } | null>(null);
 
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
-        setApiProfile(null);
-        return;
-      }
-      fetch("/api/me/profile")
-        .then((res) => res.json())
-        .then((data) => setApiProfile(data.profile ?? null))
-        .catch(() => setApiProfile(null));
-    });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) {
-        setApiProfile(null);
-        return;
-      }
-      fetch("/api/me/profile")
-        .then((res) => res.json())
-        .then((data) => setApiProfile(data.profile ?? null))
-        .catch(() => setApiProfile(null));
-    });
-    return () => subscription.unsubscribe();
-  }, []);
+    if (!user) return;
 
-  if (apiProfile !== undefined && apiProfile !== null) return apiProfile;
-  return localProfile;
+    let cancelled = false;
+    fetch("/api/me/profile")
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled) {
+          setFetched({ userId: user.id, profile: data.profile ?? null });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFetched({ userId: user.id, profile: null });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  // The server profile is authoritative once signed in; the local one covers
+  // guests and the moment before the fetch resolves. Matching on user id keeps
+  // a previous account's profile from showing after a switch.
+  const apiProfile = user && fetched?.userId === user.id ? fetched.profile : null;
+
+  return apiProfile ?? localProfile;
 }
 
 interface UserProfileProps {
@@ -94,20 +93,8 @@ interface UserProfileProps {
 
 export function UserProfile({ compact = false }: UserProfileProps) {
   const profile = useUserProfile();
-  const [hasSession, setHasSession] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setHasSession(!!session?.user);
-    });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setHasSession(!!session?.user);
-    });
-    return () => subscription.unsubscribe();
-  }, []);
+  const { user, isLoading } = useAuth();
+  const hasSession = isLoading ? null : Boolean(user);
 
   if (compact) {
     if (!profile) return null;
