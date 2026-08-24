@@ -1074,7 +1074,16 @@ export async function collectVotedProceduresForIngest(): Promise<
 }
 
 export async function collectSessionsForIngest(): Promise<IngestSession[]> {
-  const response = await getMeetings();
+  // Non-fatal: the meetings endpoint failing (a 429, say) should not discard
+  // the procedure work that ran alongside it.
+  let response: ApiResponse<ApiMeeting>;
+  try {
+    response = await getMeetings();
+  } catch (error) {
+    console.warn("Session collection failed, continuing without it:", error);
+    return [];
+  }
+
   const sessions = transformMeetings(response);
 
   return sessions.map((session) => ({
