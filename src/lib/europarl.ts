@@ -895,6 +895,55 @@ export interface IngestSession {
  */
 const INGEST_YEARS = 3;
 
+/** The EP API caps a page at 200 and honours `offset`, so walk it. */
+const INGEST_PAGE_SIZE = 200;
+
+/** Backstop against an upstream that never returns a short page. */
+const INGEST_MAX_PAGES_PER_YEAR = 15;
+
+/**
+ * Fetches every procedure the EP API will return for a year.
+ *
+ * The request-time path deliberately asks for 15, because it runs per render.
+ * The ingest job has no such constraint and this is the whole reason it
+ * exists, so it paginates instead.
+ */
+async function fetchAllProcedureBasicsForYear(
+  year: number
+): Promise<ApiProcedureBasic[]> {
+  const collected: ApiProcedureBasic[] = [];
+
+  for (let page = 0; page < INGEST_MAX_PAGES_PER_YEAR; page++) {
+    const offset = page * INGEST_PAGE_SIZE;
+
+    try {
+      const res = await fetch(
+        `${BASE_URL}/procedures?format=application%2Fld%2Bjson&offset=${offset}&limit=${INGEST_PAGE_SIZE}&year=${year}`,
+        {
+          headers: { Accept: "application/ld+json" },
+          cache: "no-store",
+          signal: AbortSignal.timeout(30000),
+        }
+      );
+
+      if (!res.ok) break;
+
+      const data: ApiResponse<ApiProcedureBasic> = await res.json();
+      const items = data.data || data["@graph"] || [];
+
+      collected.push(...items);
+
+      // A short page means we have reached the end of the year.
+      if (items.length < INGEST_PAGE_SIZE) break;
+    } catch (error) {
+      console.warn(`Procedure page ${offset} for ${year} failed:`, error);
+      break;
+    }
+  }
+
+  return collected;
+}
+
 function resolveReference(basic: ApiProcedureBasic): string {
   const fromLabel = extractReferenceFromLabel(basic.label || "");
   if (fromLabel) return fromLabel;
@@ -912,59 +961,78 @@ function resolveReference(basic: ApiProcedureBasic): string {
  * Intended for the scheduled ingest job only — it makes far more upstream
  * requests than any request-time path should.
  */
-export async function collectProceduresForIngest(): Promise<IngestProcedure[]> {
+export async function collectProcedureBasicsForIngest(): Promise<
+  IngestProcedure[]
+> {
   const currentYear = new Date().getFullYear();
   const years = Array.from({ length: INGEST_YEARS }, (_, i) => currentYear - i);
 
   const perYear = await mapWithConcurrency(years, 2, (year) =>
-    fetchProceduresByYear(year)
+    fetchAllProcedureBasicsForYear(year)
   );
-
-  const basics = perYear.flat();
 
   // The same procedure can appear under more than one year bucket.
   const unique = new Map<string, ApiProcedureBasic>();
-  for (const basic of basics) {
+  for (const basic of perYear.flat()) {
     const reference = resolveReference(basic);
     if (reference && !unique.has(reference)) unique.set(reference, basic);
   }
 
-  const entries = [...unique.entries()];
+  return [...unique.entries()].map(([reference, basic]) => ({
+    reference,
+    process_id: basic.process_id ?? null,
+    titles: { en: basic.label ?? reference },
+    summaries: {},
+    type: getProcedureTypeLabel(basic.process_type),
+    status: "In Progress",
+    committees: [],
+    source_url: getProcedureUrl(reference),
+    last_activity_date: null,
+    last_activity_type: null,
+    is_completed: false,
+    votes_favor: null,
+    votes_against: null,
+    votes_abstention: null,
+    voted_at: null,
+  }));
+}
 
-  const details = await mapWithConcurrency(
-    entries,
-    MAX_CONCURRENT_DETAIL_REQUESTS,
-    ([, basic]) => {
-      const procId = basic.process_id || basic.id.split("/").pop() || "";
-      return getProcedureDetails(procId);
-    }
-  );
+export interface ProcedureEnrichment {
+  titles: Record<string, string>;
+  summaries: Record<string, string>;
+  status: string;
+  committees: string[];
+  last_activity_date: string | null;
+  last_activity_type: string | null;
+}
 
-  return entries.map(([reference, basic], index) => {
-    const detailed = details[index];
-    const lastActivity = detailed
-      ? getLatestActivity(detailed.consists_of)
-      : undefined;
-    const status = detailed ? getStageLabel(detailed.current_stage) : "Active";
+/**
+ * Fetches the detail record for one procedure.
+ *
+ * Kept separate from the basic listing so the job can enrich a bounded batch
+ * per run: one detail request per procedure over thousands of rows would not
+ * fit in a serverless invocation.
+ */
+export async function fetchProcedureEnrichment(
+  reference: string,
+  processId: string | null
+): Promise<ProcedureEnrichment | null> {
+  const procId =
+    processId || reference.replace(/\//g, "_").replace(/[()]/g, "");
 
-    return {
-      reference,
-      process_id: basic.process_id ?? null,
-      titles: detailed?.process_title ?? { en: basic.label ?? reference },
-      summaries: detailed?.process_summary ?? {},
-      type: getProcedureTypeLabel(basic.process_type),
-      status,
-      committees: detailed ? extractCommittees(detailed.had_participation) : [],
-      source_url: getProcedureUrl(reference),
-      last_activity_date: lastActivity?.date ?? null,
-      last_activity_type: lastActivity?.type ?? null,
-      is_completed: status === "Completed",
-      votes_favor: null,
-      votes_against: null,
-      votes_abstention: null,
-      voted_at: null,
-    };
-  });
+  const detailed = await getProcedureDetails(procId);
+  if (!detailed) return null;
+
+  const lastActivity = getLatestActivity(detailed.consists_of);
+
+  return {
+    titles: detailed.process_title ?? {},
+    summaries: detailed.process_summary ?? {},
+    status: getStageLabel(detailed.current_stage),
+    committees: extractCommittees(detailed.had_participation),
+    last_activity_date: lastActivity?.date ?? null,
+    last_activity_type: lastActivity?.type ?? null,
+  };
 }
 
 /**

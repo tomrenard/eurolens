@@ -1,8 +1,8 @@
 import {
-  collectProceduresForIngest,
+  collectProcedureBasicsForIngest,
   collectVotedProceduresForIngest,
   collectSessionsForIngest,
-  type IngestProcedure,
+  fetchProcedureEnrichment,
 } from "@/lib/europarl";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -16,59 +16,26 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 const UPSERT_CHUNK_SIZE = 100;
 
+/**
+ * How many procedures to fetch detail records for per run.
+ *
+ * Each one is an upstream request, and the whole invocation has to fit inside
+ * the platform's function timeout (60s on Vercel's Hobby plan). The daily
+ * schedule works through the backlog over successive runs.
+ */
+const ENRICH_BATCH_SIZE = 120;
+
+/** Stop starting new enrichment work past this point in the run. */
+const ENRICH_TIME_BUDGET_MS = 35_000;
+
 export interface IngestResult {
   ok: boolean;
   proceduresUpserted: number;
+  proceduresEnriched: number;
+  proceduresPendingEnrichment: number;
   sessionsUpserted: number;
   error?: string;
   durationMs: number;
-}
-
-/**
- * Merges the in-progress and voted collections.
- *
- * A file can appear in both — it was tracked while in progress and has since
- * been voted on. The voted record wins for vote fields, but the in-progress
- * record usually holds the richer multilingual title and committee list, so
- * the two are combined rather than one replacing the other.
- */
-function mergeProcedures(
-  inProgress: IngestProcedure[],
-  voted: IngestProcedure[]
-): IngestProcedure[] {
-  const merged = new Map<string, IngestProcedure>();
-
-  for (const procedure of inProgress) {
-    merged.set(procedure.reference, procedure);
-  }
-
-  for (const procedure of voted) {
-    const existing = merged.get(procedure.reference);
-
-    if (!existing) {
-      merged.set(procedure.reference, procedure);
-      continue;
-    }
-
-    merged.set(procedure.reference, {
-      ...existing,
-      status: procedure.status,
-      is_completed: true,
-      votes_favor: procedure.votes_favor,
-      votes_against: procedure.votes_against,
-      votes_abstention: procedure.votes_abstention,
-      voted_at: procedure.voted_at,
-      last_activity_date:
-        procedure.last_activity_date ?? existing.last_activity_date,
-      last_activity_type:
-        procedure.last_activity_type ?? existing.last_activity_type,
-      titles: Object.keys(existing.titles).length
-        ? existing.titles
-        : procedure.titles,
-    });
-  }
-
-  return [...merged.values()];
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -87,6 +54,8 @@ export async function runIngest(): Promise<IngestResult> {
     return {
       ok: false,
       proceduresUpserted: 0,
+      proceduresEnriched: 0,
+      proceduresPendingEnrichment: 0,
       sessionsUpserted: 0,
       error: "Supabase service role is not configured",
       durationMs: Date.now() - startedAt,
@@ -118,22 +87,31 @@ export async function runIngest(): Promise<IngestResult> {
   }
 
   try {
-    // Collected in parallel: they hit different upstream endpoints, and a
-    // failure in either should fail the run rather than half-fill the mirror.
-    const [inProgress, voted, sessions] = await Promise.all([
-      collectProceduresForIngest(),
+    const [basics, voted, sessions] = await Promise.all([
+      collectProcedureBasicsForIngest(),
       collectVotedProceduresForIngest(),
       collectSessionsForIngest(),
     ]);
 
-    const procedures = mergeProcedures(inProgress, voted).filter(
-      (procedure) => procedure.reference.length > 0
-    );
-
     const now = new Date().toISOString();
+
+    // Phase 1 — listings. `ignoreDuplicates` means a row that has already been
+    // enriched keeps its richer values instead of being reset to the sparse
+    // listing version on every run.
+    const listed = basics.filter((p) => p.reference.length > 0);
     let proceduresUpserted = 0;
 
-    for (const batch of chunk(procedures, UPSERT_CHUNK_SIZE)) {
+    for (const batch of chunk(listed, UPSERT_CHUNK_SIZE)) {
+      const { error } = await supabase
+        .from("procedures")
+        .upsert(batch, { onConflict: "reference", ignoreDuplicates: true });
+
+      if (error) throw new Error(`procedures insert failed: ${error.message}`);
+      proceduresUpserted += batch.length;
+    }
+
+    // Phase 2 — voted texts. These carry vote counts, so they do overwrite.
+    for (const batch of chunk(voted, UPSERT_CHUNK_SIZE)) {
       const { error } = await supabase
         .from("procedures")
         .upsert(
@@ -141,10 +119,11 @@ export async function runIngest(): Promise<IngestResult> {
           { onConflict: "reference" }
         );
 
-      if (error) throw new Error(`procedures upsert failed: ${error.message}`);
+      if (error) throw new Error(`voted upsert failed: ${error.message}`);
       proceduresUpserted += batch.length;
     }
 
+    // Phase 3 — sessions.
     let sessionsUpserted = 0;
 
     for (const batch of chunk(sessions, UPSERT_CHUNK_SIZE)) {
@@ -159,9 +138,51 @@ export async function runIngest(): Promise<IngestResult> {
       sessionsUpserted += batch.length;
     }
 
+    // Phase 4 — enrich a bounded batch of never-enriched rows. The daily
+    // schedule works through the backlog across successive runs.
+    const { data: pending } = await supabase
+      .from("procedures")
+      .select("reference, process_id")
+      .is("enriched_at", null)
+      .limit(ENRICH_BATCH_SIZE);
+
+    let proceduresEnriched = 0;
+
+    for (const row of (pending ?? []) as Array<{
+      reference: string;
+      process_id: string | null;
+    }>) {
+      if (Date.now() - startedAt > ENRICH_TIME_BUDGET_MS) break;
+
+      const enrichment = await fetchProcedureEnrichment(
+        row.reference,
+        row.process_id
+      );
+
+      // Mark even a failed lookup as attempted, so one permanently
+      // unresolvable reference cannot block the queue every single run.
+      const { error } = await supabase
+        .from("procedures")
+        .update({
+          ...(enrichment ?? {}),
+          enriched_at: now,
+          ingested_at: now,
+        })
+        .eq("reference", row.reference);
+
+      if (!error && enrichment) proceduresEnriched++;
+    }
+
+    const { count: stillPending } = await supabase
+      .from("procedures")
+      .select("reference", { count: "exact", head: true })
+      .is("enriched_at", null);
+
     return finish({
       ok: true,
       proceduresUpserted,
+      proceduresEnriched,
+      proceduresPendingEnrichment: stillPending ?? 0,
       sessionsUpserted,
       durationMs: Date.now() - startedAt,
     });
@@ -169,6 +190,8 @@ export async function runIngest(): Promise<IngestResult> {
     return finish({
       ok: false,
       proceduresUpserted: 0,
+      proceduresEnriched: 0,
+      proceduresPendingEnrichment: 0,
       sessionsUpserted: 0,
       error: error instanceof Error ? error.message : "Unknown ingest error",
       durationMs: Date.now() - startedAt,
