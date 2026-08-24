@@ -65,7 +65,6 @@ function createDefaultProfile(): UserProfile {
       petitionsSigned: 0,
       proceduresShared: 0,
       proceduresViewed: 0,
-      summariesGenerated: 0,
     },
     createdAt: new Date().toISOString(),
   };
@@ -87,7 +86,6 @@ function migrateProfile(profile: UserProfile): UserProfile {
         petitionsSigned: stats.petitionsSigned ?? 0,
         proceduresShared: stats.proceduresShared ?? 0,
         proceduresViewed: stats.proceduresViewed ?? 0,
-        summariesGenerated: stats.summariesGenerated ?? 0,
       },
     };
   }
@@ -181,16 +179,6 @@ export function recordProcedureView(): { profile: UserProfile; xpGained: number 
   saveUserProfile(profile);
   
   return { profile, xpGained: XP_REWARDS.VIEW_PROCEDURE };
-}
-
-export function recordSummaryGenerated(): { profile: UserProfile; xpGained: number } {
-  const profile = getUserProfile();
-  profile.stats.summariesGenerated += 1;
-  profile.xp += XP_REWARDS.GENERATE_SUMMARY;
-  profile.level = getLevel(profile.xp);
-  saveUserProfile(profile);
-  
-  return { profile, xpGained: XP_REWARDS.GENERATE_SUMMARY };
 }
 
 export function getPositions(): UserPosition[] {
@@ -370,7 +358,7 @@ export function checkAchievements(): Achievement[] {
     if (achievement) unlockedAchievements.push(achievement);
   }
   
-  if (!profile.achievements.includes("curious-mind") && profile.stats.summariesGenerated >= 1) {
+  if (!profile.achievements.includes("curious-mind") && profile.stats.proceduresViewed >= 1) {
     const { achievement } = unlockAchievement("curious-mind");
     if (achievement) unlockedAchievements.push(achievement);
   }
@@ -410,7 +398,7 @@ export function checkAchievements(): Achievement[] {
     if (achievement) unlockedAchievements.push(achievement);
   }
   
-  if (!profile.achievements.includes("political-scientist") && profile.stats.summariesGenerated >= 10) {
+  if (!profile.achievements.includes("political-scientist") && profile.stats.proceduresViewed >= 10) {
     const { achievement } = unlockAchievement("political-scientist");
     if (achievement) unlockedAchievements.push(achievement);
   }

@@ -29,7 +29,6 @@ export interface UserStats {
   petitionsSigned: number;
   proceduresShared: number;
   proceduresViewed: number;
-  summariesGenerated: number;
 }
 
 export interface UserProfile {
@@ -93,7 +92,6 @@ export const LEVEL_TITLES: Record<number, string> = {
 
 export const XP_REWARDS = {
   VIEW_PROCEDURE: 5,
-  GENERATE_SUMMARY: 10,
   STATE_POSITION: 10,
   CONTACT_MEP: 50,
   JOIN_CONSULTATION: 40,
@@ -114,7 +112,7 @@ export const ACHIEVEMENTS_LIST: Omit<Achievement, "unlockedAt" | "progress">[] =
   {
     id: "curious-mind",
     name: "Curious Mind",
-    description: "Generate your first AI summary",
+    description: "Read your first plain-English explainer",
     icon: "🧠",
     xpReward: 50,
   },
@@ -174,7 +172,7 @@ export const ACHIEVEMENTS_LIST: Omit<Achievement, "unlockedAt" | "progress">[] =
   {
     id: "political-scientist",
     name: "Political Scientist",
-    description: "Generate 10 AI summaries",
+    description: "Read 10 plain-English explainers",
     icon: "📚",
     xpReward: 150,
     maxProgress: 10,

@@ -1,10 +1,9 @@
 "use client";
 
-import { useCallback, useState, useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import {
   ExternalLink,
-  RefreshCw,
   Calendar,
   CircleCheck,
   ThumbsUp,
@@ -14,19 +13,15 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { DossierSkeleton } from "@/components/dossier-skeleton";
 import { ActionPanel } from "@/components/action-panel";
-import { AuthButton } from "@/components/auth-button";
+import { PlainEnglish } from "@/components/plain-english";
 import { formatRelativeDate, isRecentDate } from "@/lib/utils";
-import { createClient } from "@/lib/supabase/client";
 import type {
   LegislativeProcedure,
   Persona,
   Country,
   VotingResult,
 } from "@/types/europarl";
-import type { User } from "@supabase/supabase-js";
 
 interface VotingBarProps {
   votingResult: VotingResult;
@@ -90,14 +85,6 @@ function VotingBar({ votingResult }: VotingBarProps) {
   );
 }
 
-function getCacheKey(
-  procedureId: string,
-  persona: string,
-  country: string
-): string {
-  return `eurolens-summary-${procedureId}-${persona}-${country}`;
-}
-
 interface DossierCardProps {
   procedure: LegislativeProcedure;
   persona?: Persona;
@@ -107,227 +94,7 @@ interface DossierCardProps {
 export function DossierCard({
   procedure,
   persona = "general",
-  country = "general",
 }: DossierCardProps) {
-  const [completion, setCompletion] = useState<string>("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [lastContext, setLastContext] = useState<string | null>(null);
-  const [isCached, setIsCached] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
-
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-    });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-    return () => subscription.unsubscribe();
-  }, []);
-
-  const currentContext = `${procedure.id}-${persona}-${country}`;
-  const cacheKey = getCacheKey(procedure.id, persona, country);
-  const hasRequested = lastContext !== null;
-  const needsRefresh = hasRequested && lastContext !== currentContext;
-
-  useEffect(() => {
-    try {
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        setCompletion(cached);
-        setLastContext(currentContext);
-        setIsCached(true);
-      }
-    } catch {
-      // localStorage not available
-    }
-  }, [cacheKey, currentContext]);
-
-  const requestSummary = useCallback(async () => {
-    setLastContext(currentContext);
-    setCompletion("");
-    setError(null);
-    setIsLoading(true);
-    setIsCached(false);
-
-    try {
-      const response = await fetch("/api/summarize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: procedure.title,
-          summary: procedure.summary || procedure.title,
-          subjects: procedure.subjects,
-          persona,
-          country,
-        }),
-      });
-
-      if (!response.ok) {
-        const text = await response.text();
-        if (response.status === 401) {
-          try {
-            const data = JSON.parse(text) as { error?: string };
-            throw new Error(data.error ?? "Sign in to use AI summaries");
-          } catch (e) {
-            if (e instanceof Error && e.message.includes("Sign in")) throw e;
-            throw new Error("Sign in to use AI summaries");
-          }
-        }
-        throw new Error(text || `HTTP ${response.status}`);
-      }
-
-      if (!response.body) {
-        throw new Error("No response body");
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let text = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        text += chunk;
-        setCompletion(text);
-      }
-
-      try {
-        localStorage.setItem(cacheKey, text);
-        setIsCached(true);
-      } catch {
-        // localStorage not available or quota exceeded
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      setError(message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [currentContext, cacheKey, procedure, persona, country]);
-
-  const renderSummary = () => {
-    if (!user) {
-      return (
-        <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">
-            Sign in to generate an AI summary.
-          </p>
-          <AuthButton />
-        </div>
-      );
-    }
-
-    if (error) {
-      const isRateLimit =
-        error.includes("429") ||
-        error.includes("quota") ||
-        error.includes("rate") ||
-        error.includes("exceeded");
-
-      return (
-        <div className="text-destructive text-sm space-y-2" role="alert">
-          <p className="font-medium">
-            {isRateLimit ? "Rate limit exceeded" : "Failed to generate summary"}
-          </p>
-          <p className="text-xs opacity-80">
-            {isRateLimit ? "Please wait 30-60 seconds and try again." : error}
-          </p>
-          <Button
-            onClick={requestSummary}
-            variant="outline"
-            size="sm"
-            className="mt-2"
-          >
-            Retry
-          </Button>
-        </div>
-      );
-    }
-
-    if (!hasRequested || needsRefresh) {
-      return (
-        <Button
-          onClick={requestSummary}
-          variant="secondary"
-          className="w-full py-3 sm:py-2 text-sm"
-          aria-label={`Generate AI summary for ${procedure.title}`}
-        >
-          {needsRefresh
-            ? "Refresh Summary for New Context"
-            : "Generate AI Summary"}
-        </Button>
-      );
-    }
-
-    if (isLoading && !completion) {
-      return <DossierSkeleton />;
-    }
-
-    if (completion) {
-      return (
-        <div
-          className="prose prose-sm max-w-none text-card-foreground"
-          aria-label={`AI Summary of ${procedure.title}`}
-          role="region"
-        >
-          <div className="space-y-3 text-sm">
-            {completion.split("\n").map((line, idx) => {
-              if (line.startsWith("## ")) {
-                return (
-                  <h4
-                    key={idx}
-                    className="font-semibold text-primary mt-3 first:mt-0"
-                  >
-                    {line.replace("## ", "")}
-                  </h4>
-                );
-              }
-              if (line.trim()) {
-                return (
-                  <p
-                    key={idx}
-                    className="text-muted-foreground leading-relaxed"
-                  >
-                    {line}
-                  </p>
-                );
-              }
-              return null;
-            })}
-          </div>
-          {isLoading && (
-            <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1" />
-          )}
-          {isCached && !isLoading && (
-            <div className="flex items-center gap-2 mt-3 pt-3 border-t">
-              <span className="text-xs text-muted-foreground">
-                Cached summary
-              </span>
-              <Button
-                onClick={requestSummary}
-                variant="ghost"
-                size="sm"
-                className="h-6 px-2 text-xs"
-              >
-                <RefreshCw className="h-3 w-3 mr-1" />
-                Regenerate
-              </Button>
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    return <DossierSkeleton />;
-  };
-
   const typeColors: Record<string, string> = {
     Codecision: "border-l-blue-500",
     Consultation: "border-l-purple-500",
@@ -401,7 +168,9 @@ export function DossierCard({
         )}
       </CardHeader>
       <CardContent>
-        <div className="border-t pt-4">{renderSummary()}</div>
+        <div className="border-t pt-4">
+          <PlainEnglish procedure={procedure} persona={persona} />
+        </div>
         <div className="mt-4 pt-3 border-t space-y-3">
           {procedure.votingResult && (
             <VotingBar votingResult={procedure.votingResult} />
