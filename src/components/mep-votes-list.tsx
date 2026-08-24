@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Search, ThumbsUp, ThumbsDown, MinusCircle, ExternalLink, Users } from "lucide-react";
+import { Search, ThumbsUp, ThumbsDown, MinusCircle, CircleSlash, ExternalLink, Users } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,8 @@ function VoteIcon({ vote }: { vote: VoteType }) {
       return <ThumbsDown className="h-4 w-4 text-red-500" />;
     case "abstention":
       return <MinusCircle className="h-4 w-4 text-gray-400" />;
+    case "did_not_vote":
+      return <CircleSlash className="h-4 w-4 text-gray-400" />;
   }
 }
 
@@ -27,6 +29,7 @@ function VoteBadge({ vote }: { vote: VoteType }) {
     favor: { className: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400", label: "In Favor" },
     against: { className: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400", label: "Against" },
     abstention: { className: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400", label: "Abstention" },
+    did_not_vote: { className: "bg-gray-100 text-gray-500 dark:bg-gray-800/60 dark:text-gray-500", label: "Did not vote" },
   };
   
   const { className, label } = variants[vote];
@@ -77,7 +80,12 @@ export function MEPVotesList({ votes }: MEPVotesListProps) {
   const displayedVotes = showAll ? filteredVotes : filteredVotes.slice(0, 20);
 
   const voteStats = useMemo(() => {
-    const stats = { favor: 0, against: 0, abstention: 0 };
+    const stats: Record<VoteType, number> = {
+      favor: 0,
+      against: 0,
+      abstention: 0,
+      did_not_vote: 0,
+    };
     filteredVotes.forEach((v) => stats[v.vote]++);
     return stats;
   }, [filteredVotes]);
@@ -132,6 +140,7 @@ export function MEPVotesList({ votes }: MEPVotesListProps) {
             <option value="favor">In Favor</option>
             <option value="against">Against</option>
             <option value="abstention">Abstention</option>
+            <option value="did_not_vote">Did not vote</option>
           </select>
 
           <select
@@ -171,6 +180,10 @@ export function MEPVotesList({ votes }: MEPVotesListProps) {
           <span className="flex items-center gap-1.5">
             <MinusCircle className="h-4 w-4 text-gray-400" />
             <span className="font-medium">{voteStats.abstention}</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <CircleSlash className="h-4 w-4 text-gray-400" />
+            <span className="font-medium">{voteStats.did_not_vote}</span>
           </span>
         </div>
 

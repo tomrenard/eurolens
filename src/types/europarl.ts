@@ -126,12 +126,14 @@ export const COUNTRY_LABELS: Record<Country, string> = {
   NL: "Netherlands",
 };
 
-export type VoteType = "favor" | "against" | "abstention";
+export type VoteType = "favor" | "against" | "abstention" | "did_not_vote";
 
 export interface MEPVote {
   mepId: string;
   name: string;
   country: string;
+  /** ISO 3166-1 alpha-2, used to match against the reader's selected country. */
+  countryCode: string;
   politicalGroup: string;
   vote: VoteType;
 }
