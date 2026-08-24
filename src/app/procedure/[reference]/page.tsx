@@ -1,10 +1,16 @@
 import { Suspense } from "react";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, FileText } from "lucide-react";
 import { ProcedureDetail } from "@/components/procedure-detail";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { getProcedureByReference } from "@/lib/procedure";
+import { explain } from "@/lib/explainer";
+import { siteUrl } from "@/lib/site";
+
+export const revalidate = 3600;
 
 interface ProcedurePageProps {
   params: Promise<{
@@ -35,8 +41,31 @@ export default async function ProcedurePage({ params }: ProcedurePageProps) {
     notFound();
   }
 
+  const procedure = await getProcedureByReference(decodedReference);
+
+  // schema.org/Legislation gives search engines and civic-data aggregators a
+  // machine-readable handle on the file, which plain prose cannot provide.
+  const structuredData = {
+    "@context": "https://schema.org",
+    "@type": "Legislation",
+    name: procedure.title,
+    legislationIdentifier: procedure.reference,
+    legislationType: procedure.type,
+    legislationJurisdiction: "European Union",
+    url: `${siteUrl()}/procedure/${encodeURIComponent(procedure.reference)}`,
+    ...(procedure.summary ? { abstract: procedure.summary } : {}),
+    ...(procedure.lastActivity ? { dateModified: procedure.lastActivity.date } : {}),
+    ...(procedure.sourceUrl ? { sameAs: procedure.sourceUrl } : {}),
+  };
+
   return (
     <main className="min-h-screen p-4 md:p-8 max-w-7xl mx-auto">
+      <script
+        type="application/ld+json"
+        // Values are our own normalised strings, serialised by JSON.stringify.
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
+      />
+
       <div className="mb-8">
         <Button variant="ghost" asChild className="gap-2 -ml-2 mb-4">
           <Link href="/">
@@ -52,8 +81,12 @@ export default async function ProcedurePage({ params }: ProcedurePageProps) {
               <FileText className="h-8 w-8 text-white" />
             </div>
             <div>
-              <p className="text-sm font-mono text-muted-foreground mb-1">{decodedReference}</p>
-              <h1 className="text-xl md:text-2xl font-bold text-foreground">Procedure Details</h1>
+              <p className="text-sm font-mono text-muted-foreground mb-1">
+                {decodedReference}
+              </p>
+              <h1 className="text-xl md:text-2xl font-bold text-foreground">
+                Procedure Details
+              </h1>
             </div>
           </div>
         </div>
@@ -66,12 +99,49 @@ export default async function ProcedurePage({ params }: ProcedurePageProps) {
   );
 }
 
-export async function generateMetadata({ params }: ProcedurePageProps) {
+export async function generateMetadata({
+  params,
+}: ProcedurePageProps): Promise<Metadata> {
   const { reference } = await params;
   const decodedReference = decodeURIComponent(reference);
+  const procedure = await getProcedureByReference(decodedReference);
+  const explanation = explain({
+    id: procedure.reference,
+    reference: procedure.reference,
+    title: procedure.title,
+    type: procedure.type,
+    status: procedure.status,
+    subjects: [],
+    summary: procedure.summary,
+  });
+
+  const title = procedure.isFallback
+    ? `${decodedReference} | EuroLens`
+    : `${procedure.title} (${decodedReference}) | EuroLens`;
+
+  // Lead the description with the plain-English reading rather than the
+  // reference: this is the snippet a search result or a shared link shows.
+  const description = [explanation.what, explanation.stage]
+    .join(" ")
+    .slice(0, 300);
+
+  const url = `${siteUrl()}/procedure/${encodeURIComponent(decodedReference)}`;
 
   return {
-    title: `${decodedReference} | EuroLens`,
-    description: `Details for European Parliament procedure ${decodedReference}`,
+    title,
+    description,
+    alternates: { canonical: url },
+    openGraph: {
+      title,
+      description,
+      url,
+      type: "article",
+      siteName: "EuroLens",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+    },
   };
 }
